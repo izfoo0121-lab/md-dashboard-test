@@ -299,7 +299,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
 <div class="header">
   <div class="header-top">
     <div>
-      <div class="header-title">Miracle-奇迹 MD</div>
+      <div class="header-title">MIRACLE-奇迹 MD</div>
       <div class="header-sub">Sales Dashboard</div>
     </div>
     <div>
@@ -311,6 +311,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
           style="display:none;margin-top:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
                  color:#fff;font-family:var(--mono);font-size:8px;padding:2px 6px;border-radius:6px;cursor:pointer;">
         </select>
+        <button id="logout-btn" onclick="doLogout()" style="display:none;margin-top:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;font-family:var(--mono);font-size:8px;padding:3px 8px;border-radius:6px;cursor:pointer;">⎋ Logout</button>
       </div>
     </div>
   </div>
@@ -438,6 +439,9 @@ function checkPin() {
     document.getElementById('pin-name-hint').textContent = agentName === 'GT138888' ? 'ADMIN' : agentName;
     setTimeout(()=>{
       document.getElementById('pin-gate').style.display = 'none';
+      // Show logout button
+      const lb = document.getElementById('logout-btn');
+      if (lb) lb.style.display = 'block';
       // Lock to agent if not admin
       if (agentName !== 'GT138888') {
         lockToAgent(agentName);
@@ -456,6 +460,21 @@ function checkPin() {
       _pin=''; _pinLocked=false; updatePinDisplay();
     }, 1000);
   }
+}
+
+function doLogout() {
+  sessionStorage.removeItem('md_agent');
+  sessionStorage.removeItem('md_auth');
+  // Reset UI
+  const lb = document.getElementById('logout-btn');
+  if (lb) lb.style.display = 'none';
+  const sel = document.getElementById('agent-select');
+  if (sel) sel.value = '';
+  // Show PIN gate
+  document.getElementById('pin-gate').style.display = 'flex';
+  // Reset PIN
+  window._pin = ''; window._pinLocked = false;
+  if (typeof updatePinDisplay === 'function') updatePinDisplay();
 }
 
 function lockToAgent(agentName) {
