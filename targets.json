@@ -3707,5 +3707,17 @@
     "YI": "1013",
     "SAM": "1014",
     "GT138888": "0121"
+  },
+  "birthday_overrides": {
+    "300-BR031": "remove",
+    "300-H030": "remove",
+    "300-WK004": "remove",
+    "300-WK015": "remove",
+    "300-WK027": "remove",
+    "300-WK081": "remove",
+    "300-BY266": "remove",
+    "300-D300": "remove",
+    "300-D070": "remove",
+    "300-D247": "remove"
   }
 }
