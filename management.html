@@ -377,10 +377,19 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
     <div id="dropping-debtors-section" style="display:none;">
       <div class="sec-lbl">📉 Dropping Debtors — Volume Down vs Last Month</div>
       <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin:0 0 8px 2px;">Debtors who bought last month but reduced volume this month. Sorted worst drop first.</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;" id="drop-filter-row">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;" id="drop-filter-row">
         <button onclick="setDropFilter('all',this)" class="lb-btn active" style="background:var(--ink);color:#fff;border-radius:6px;padding:4px 10px;">All</button>
         <button onclick="setDropFilter('stopped',this)" class="lb-btn" style="border-radius:6px;padding:4px 10px;">Stopped buying</button>
         <button onclick="setDropFilter('reduced',this)" class="lb-btn" style="border-radius:6px;padding:4px 10px;">Reduced ≥30%</button>
+      </div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px;" id="drop-sku-filter-row">
+        <button onclick="setDropSkuFilter('all',this)" class="lb-btn active" style="background:var(--ink);color:#fff;border-radius:6px;padding:3px 10px;font-size:9px;">All SKU</button>
+        <button onclick="setDropSkuFilter('IFACE',this)" class="lb-btn" style="border-radius:6px;padding:3px 10px;font-size:9px;color:#1a5c8f;border-color:#1a5c8f33;">iFACE</button>
+        <button onclick="setDropSkuFilter('SUKUN',this)" class="lb-btn" style="border-radius:6px;padding:3px 10px;font-size:9px;color:#6b3fa0;border-color:#6b3fa033;">SUKUN</button>
+        <button onclick="setDropSkuFilter('EVO',this)" class="lb-btn" style="border-radius:6px;padding:3px 10px;font-size:9px;color:#c8381a;border-color:#c8381a33;">EVO</button>
+        <button onclick="setDropSkuFilter('BISON',this)" class="lb-btn" style="border-radius:6px;padding:3px 10px;font-size:9px;color:#c8860a;border-color:#c8860a33;">BISON</button>
+        <button onclick="setDropSkuFilter('TR20',this)" class="lb-btn" style="border-radius:6px;padding:3px 10px;font-size:9px;color:#2a7a4b;border-color:#2a7a4b33;">TR20</button>
+        <button onclick="setDropSkuFilter('LAM+LWM',this)" class="lb-btn" style="border-radius:6px;padding:3px 10px;font-size:9px;color:#5a5550;border-color:#5a555033;">LAM+LWM</button>
       </div>
       <div class="card" style="padding:0;overflow:hidden;">
         <div id="dropping-debtors-list"></div>
@@ -1986,7 +1995,8 @@ function renderBrandVolumeAlert() {
 }
 
 // ── Dropping Debtors ───────────────────────────────────────────────────────
-let _dropFilter = 'all';
+let _dropFilter    = 'all';
+let _dropSkuFilter = 'all';
 
 function setDropFilter(f, btn) {
   _dropFilter = f;
@@ -1994,6 +2004,23 @@ function setDropFilter(f, btn) {
     b.style.background = 'transparent'; b.style.color = 'var(--ink)';
   });
   if (btn) { btn.style.background = 'var(--ink)'; btn.style.color = '#fff'; }
+  renderDroppingDebtors();
+}
+
+function setDropSkuFilter(f, btn) {
+  _dropSkuFilter = f;
+  document.querySelectorAll('#drop-sku-filter-row .lb-btn').forEach(b => {
+    b.style.background = 'transparent';
+    // restore original brand colour on text
+    const orig = b.getAttribute('data-orig-color') || 'var(--ink)';
+    b.style.color = orig;
+  });
+  if (btn) {
+    const origColor = btn.style.color;
+    if (!btn.getAttribute('data-orig-color')) btn.setAttribute('data-orig-color', origColor);
+    btn.style.background = 'var(--ink)';
+    btn.style.color = '#fff';
+  }
   renderDroppingDebtors();
 }
 
@@ -2020,6 +2047,9 @@ function renderDroppingDebtors() {
       const lapsedSkus = Object.entries(d.sku_status || {})
         .filter(([, v]) => v === 'lapsed')
         .map(([k]) => k);
+
+      // Apply SKU brand filter — only show if selected brand is lapsed for this debtor
+      if (_dropSkuFilter !== 'all' && !lapsedSkus.includes(_dropSkuFilter)) return;
 
       // Find SKUs that were regular/bought before but now completely absent
       // (stopped debtors: all previously-bought SKUs are lapsed)
@@ -2054,11 +2084,12 @@ function renderDroppingDebtors() {
       ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 7px;border-radius:8px;white-space:nowrap;">Stopped</span>`
       : `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 7px;border-radius:8px;white-space:nowrap;">-${d.volume_drop_pct}%</span>`;
 
-    // SKU lapsed pills
+    // SKU lapsed pills — highlight the filtered SKU if brand filter active
     const skuPills = d.lapsedSkus.length
       ? d.lapsedSkus.map(sku => {
-          const col = SKU_COLS[sku] || 'var(--ink3)';
-          return `<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.06);color:${col};border:1px solid ${col}33;padding:1px 6px;border-radius:6px;white-space:nowrap;">${sku}</span>`;
+          const col      = SKU_COLS[sku] || 'var(--ink3)';
+          const isActive = _dropSkuFilter === sku;
+          return `<span style="font-family:var(--mono);font-size:8px;background:${isActive ? col : 'rgba(0,0,0,.06)'};color:${isActive ? '#fff' : col};border:1px solid ${col}33;padding:1px 6px;border-radius:6px;white-space:nowrap;font-weight:${isActive?'600':'400'};">${sku}</span>`;
         }).join('')
       : `<span style="font-family:var(--mono);font-size:8px;color:var(--ink3);">—</span>`;
 
