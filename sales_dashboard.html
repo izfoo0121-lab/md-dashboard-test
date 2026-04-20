@@ -299,7 +299,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
 <div class="header">
   <div class="header-top">
     <div>
-      <div class="header-title">MIRACLE-奇迹 MD</div>
+      <div class="header-title">Miracle-奇迹 MD</div>
       <div class="header-sub">Sales Dashboard</div>
     </div>
     <div>
@@ -307,11 +307,17 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
         <div class="month-badge" id="month-badge">MAR 2026</div>
         <div class="day-prog" id="day-prog">Day — of —</div>
         <div style="font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:2px;" id="last-update">Updated: —</div>
+        <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;margin-top:3px;">
+          <span id="sync-indicator" style="font-family:var(--mono);font-size:8px;color:var(--muted);">— </span>
+          <button id="sync-btn" onclick="manualSync(this)"
+            style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.05);color:var(--text);cursor:pointer;">
+            🔄 Sync
+          </button>
+        </div>
         <select id="month-selector-agent" onchange="switchMonth(this.value)"
           style="display:none;margin-top:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
                  color:#fff;font-family:var(--mono);font-size:8px;padding:2px 6px;border-radius:6px;cursor:pointer;">
         </select>
-        <button id="logout-btn" onclick="doLogout()" style="display:none;margin-top:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;font-family:var(--mono);font-size:8px;padding:3px 8px;border-radius:6px;cursor:pointer;">⎋ Logout</button>
       </div>
     </div>
   </div>
@@ -439,9 +445,6 @@ function checkPin() {
     document.getElementById('pin-name-hint').textContent = agentName === 'GT138888' ? 'ADMIN' : agentName;
     setTimeout(()=>{
       document.getElementById('pin-gate').style.display = 'none';
-      // Show logout button
-      const lb = document.getElementById('logout-btn');
-      if (lb) lb.style.display = 'block';
       // Lock to agent if not admin
       if (agentName !== 'GT138888') {
         lockToAgent(agentName);
@@ -460,21 +463,6 @@ function checkPin() {
       _pin=''; _pinLocked=false; updatePinDisplay();
     }, 1000);
   }
-}
-
-function doLogout() {
-  sessionStorage.removeItem('md_agent');
-  sessionStorage.removeItem('md_auth');
-  // Reset UI
-  const lb = document.getElementById('logout-btn');
-  if (lb) lb.style.display = 'none';
-  const sel = document.getElementById('agent-select');
-  if (sel) sel.value = '';
-  // Show PIN gate
-  document.getElementById('pin-gate').style.display = 'flex';
-  // Reset PIN
-  window._pin = ''; window._pinLocked = false;
-  if (typeof updatePinDisplay === 'function') updatePinDisplay();
 }
 
 function lockToAgent(agentName) {
@@ -887,17 +875,6 @@ async function switchMonth(slug) {
 
 // ── Load Data ──────────────────────────────────────────────────────────────
 async function loadData() {
-  // Auto-configure GistSync from gist_config.json (permanent, never overwritten by bat)
-  try {
-    const cr = await fetch('gist_config.json?v='+Date.now());
-    if (cr.ok) {
-      const cfg = await cr.json();
-      if (cfg.gist_token && cfg.gist_id && typeof GistSync !== 'undefined' && !GistSync.isConfigured()) {
-        GistSync.saveConfig({ gist_id: cfg.gist_id, token: cfg.gist_token });
-      }
-    }
-  } catch(e) {}
-
   try {
     const bust = Date.now();
     const r = await fetch('dashboard_data.json?v='+Date.now());
@@ -931,15 +908,30 @@ function init() {
       `<span style="color:${col};font-weight:700;">${theo}% elapsed</span>`
     );
   }
-  // Sync claims/flags from Gist on page load
-  // Auto-configure GistSync from dashboard_data.json if not already set
-  if (typeof GistSync !== 'undefined') {
-    if (!GistSync.isConfigured() && DATA.config?.gist_token && DATA.config?.gist_id) {
-      GistSync.saveConfig({ gist_id: DATA.config.gist_id, token: DATA.config.gist_token });
-    }
-    if (GistSync.isConfigured()) {
-      GistSync.syncToLocal(DATA.current_month || '').catch(()=>{});
-    }
+  // Sync claims/flags from Gist on page load, then re-render so fresh data appears
+  if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
+    GistSync.syncToLocal(DATA.current_month || '').then(res => {
+      if (res && res.ok) {
+        // Re-render Camps + Debtors so claims pulled from Gist become visible
+        try { if (typeof renderCamps    === 'function') renderCamps();    } catch(e) {}
+        try { if (typeof renderDebtors  === 'function') renderDebtors();  } catch(e) {}
+        // Update sync indicator if present
+        const si = document.getElementById('sync-indicator');
+        if (si) {
+          si.textContent = `✓ Synced ${res.claimCount||0}`;
+          si.style.color = 'var(--green)';
+        }
+      } else {
+        const si = document.getElementById('sync-indicator');
+        if (si) {
+          si.textContent = `⚠ Offline`;
+          si.style.color = 'var(--muted)';
+        }
+      }
+    }).catch(()=>{
+      const si = document.getElementById('sync-indicator');
+      if (si) { si.textContent = '⚠ Sync failed'; si.style.color = 'var(--red)'; }
+    });
   }
 
   // Apply agent lock after data loads (session restore)
@@ -2613,34 +2605,57 @@ const CAMP_STATUS_KEY = () => {
 };
 
 function getCampStatuses() {
-  // Primary: agent's own marks (camp_status key)
-  let statuses = {};
-  try { statuses = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); }
-  catch(e) { statuses = {}; }
+  // ── BRIDGE: merge two storage formats ───────────────────────────────────
+  // Format 1 (agent self-mark, this device):  camp_status_{month}_{agent}
+  //                                            → {"campId_debtorCode": {status, remark, ts}}
+  // Format 2 (Gist sync, all devices):         camp_claim_{monthSlug}_{agent}_{campId}_{debtorCode}
+  //                                            → {ts, bulk, remark, ...}
+  //
+  // Agent's own marks (Format 1) take priority. GistSync claims (Format 2)
+  // fill in the rest. This makes Camps tab show ✓ Delivered on agent's phone
+  // after admin bulk-marks and pushes to Gist.
+  const merged = {};
+  const month  = DATA?.current_month || '';
+  const slug   = month.replace(' ','');
+  const agent  = currentAgent || '';
 
-  // Secondary: GistSync/bulk-imported claims (camp_claim keys) — read-only fallback
-  // Key format: camp_claim_Apr26_AGENT_campId_debtorCode
-  const month = (DATA?.current_month || '').replace(' ','');
-  const agent = currentAgent || '';
-  const prefix = `camp_claim_${month}_${agent}_`;
-  Object.keys(localStorage).forEach(k => {
-    if (!k.startsWith(prefix)) return;
-    const rest  = k.replace(prefix, '');          // campId_debtorCode
-    const lastU = rest.lastIndexOf('_');
-    if (lastU < 0) return;
-    const campId    = rest.substring(0, lastU);
-    const debtorCode= rest.substring(lastU + 1);
-    const key = `${campId}_${debtorCode}`;
-    if (statuses[key]) return;                     // agent's own mark takes priority
+  // 1. Seed from Format 2 (camp_claim_*) — read all claim keys for this agent+month
+  if (slug && agent) {
+    const prefix = `camp_claim_${slug}_${agent}_`;
     try {
-      const raw = JSON.parse(localStorage.getItem(k) || 'null');
-      if (!raw) return;
-      const s = raw.status || (raw.ts || raw.bulk ? 'delivered' : null);
-      if (s) statuses[key] = { status: s, ts: raw.ts || '', remark: raw.remark || '', agent };
-    } catch {}
-  });
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(prefix)) continue;
+        // Key shape: camp_claim_{slug}_{agent}_{campId}_{debtorCode}
+        // Strip prefix → "{campId}_{debtorCode}"
+        const tail = k.slice(prefix.length);
+        // campId may itself contain underscores, but debtorCode is the LAST segment
+        const lastUnderscore = tail.lastIndexOf('_');
+        if (lastUnderscore < 0) continue;
+        const campId     = tail.slice(0, lastUnderscore);
+        const debtorCode = tail.slice(lastUnderscore + 1);
+        let val = {};
+        try { val = JSON.parse(localStorage.getItem(k) || '{}'); } catch {}
+        merged[`${campId}_${debtorCode}`] = {
+          status: 'delivered',               // camp_claim_* implies delivered/claimed
+          remark: val.remark || '',
+          ts    : val.ts || '',
+          source: 'gist',                    // marker for debugging
+          bulk  : !!val.bulk
+        };
+      }
+    } catch(e) {}
+  }
 
-  return statuses;
+  // 2. Overlay Format 1 (camp_status_*) — agent's own marks win on conflict
+  try {
+    const own = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}');
+    Object.entries(own).forEach(([k, v]) => {
+      merged[k] = { ...v, source: 'self' };
+    });
+  } catch(e) {}
+
+  return merged;
 }
 
 function getCampStatus(campId, debtorCode) {
@@ -2648,23 +2663,44 @@ function getCampStatus(campId, debtorCode) {
 }
 
 function setCampStatus(campId, debtorCode, status) {
-  const all    = getCampStatuses();
+  // IMPORTANT: read from OWN storage only (not the bridged getCampStatuses),
+  // otherwise we'd write Gist-sourced entries back into our self-storage.
+  let own = {};
+  try { own = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); } catch {}
   const key    = `${campId}_${debtorCode}`;
-  const remark = all[key]?.remark || '';   // preserve existing remark
-  all[key] = { status, remark, ts: new Date().toISOString(), agent: currentAgent };
-  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(all)); } catch(e) {}
+  const remark = own[key]?.remark || '';   // preserve existing remark
+  own[key] = { status, remark, ts: new Date().toISOString(), agent: currentAgent };
+  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(own)); } catch(e) {}
+
+  // ── Sync "delivered" status to Gist via camp_claim_* so admin/other devices see it
+  if (status === 'delivered' && typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
+    const claimData = { ts: own[key].ts, remark, source: 'agent_mark' };
+    GistSync.saveClaim(DATA?.current_month||'', currentAgent, campId, debtorCode, claimData).catch(()=>{});
+  }
+  // ── If agent un-marks (changes from delivered → something else), remove the Gist claim
+  //    so admin audit doesn't keep showing it as delivered.
+  else if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
+    // Only remove if there was a prior delivered claim from this agent
+    const slug = (DATA?.current_month||'').replace(' ','');
+    const claimKey = `camp_claim_${slug}_${currentAgent}_${campId}_${debtorCode}`;
+    if (localStorage.getItem(claimKey)) {
+      GistSync.removeClaim(DATA?.current_month||'', currentAgent, campId, debtorCode).catch(()=>{});
+    }
+  }
+
   renderDebtors();
 }
 
 function saveCampRemark(campId, debtorCode) {
   const inp    = document.getElementById(`remark-${campId}`);
   if (!inp) return;
-  const all    = getCampStatuses();
+  let own = {};
+  try { own = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); } catch {}
   const key    = `${campId}_${debtorCode}`;
-  if (!all[key]) all[key] = { status: 'not_in', agent: currentAgent };
-  all[key].remark = inp.value.trim();
-  all[key].ts     = new Date().toISOString();
-  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(all)); } catch(e) {}
+  if (!own[key]) own[key] = { status: 'not_in', agent: currentAgent };
+  own[key].remark = inp.value.trim();
+  own[key].ts     = new Date().toISOString();
+  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(own)); } catch(e) {}
   // Visual feedback
   inp.style.borderColor = 'var(--green)';
   setTimeout(() => { inp.style.borderColor = ''; }, 1000);
@@ -3284,6 +3320,38 @@ async function saveEventCount() {
 // ── Boot ───────────────────────────────────────────────────────────────────
 loadData();
 
+// ── Manual Sync Button ─────────────────────────────────────────────
+// Force a fresh pull from Gist (bypass 30s cache) and re-render active tab.
+// Triggered by 🔄 Sync button in header. Used when agent suspects admin
+// pushed new claims but cache hasn't refreshed yet.
+async function manualSync(btn) {
+  const si = document.getElementById('sync-indicator');
+  if (!(typeof GistSync !== 'undefined' && GistSync.isConfigured())) {
+    if (si) { si.textContent = '⚠ Not configured'; si.style.color = 'var(--red)'; }
+    return;
+  }
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.textContent = '⏳ Syncing…'; btn.disabled = true; }
+  if (si)  { si.textContent = 'Pulling…'; si.style.color = 'var(--muted)'; }
+  try {
+    const res = await GistSync.syncToLocal(DATA?.current_month || '', { force: true });
+    if (res && res.ok) {
+      if (si) {
+        si.textContent = `✓ Synced ${res.claimCount||0}`;
+        si.style.color = 'var(--green)';
+      }
+      try { if (typeof renderCamps   === 'function') renderCamps();   } catch(e) {}
+      try { if (typeof renderDebtors === 'function') renderDebtors(); } catch(e) {}
+    } else {
+      if (si) { si.textContent = '⚠ Failed'; si.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (si) { si.textContent = '⚠ Error'; si.style.color = 'var(--red)'; }
+  } finally {
+    if (btn) { btn.textContent = origLabel || '🔄 Sync'; btn.disabled = false; }
+  }
+}
+
 // ── GistSync Module ─────────────────────────────────────────────────
 /**
  * MIRACLE-奇迹 MD Dashboard — Gist Sync Module
@@ -3301,7 +3369,7 @@ const GistSync = (() => {
   // ── Hardcoded fallback — set by admin, works for ALL devices automatically ──
   // Token scope: gist only (cannot touch code repo — safe to embed)
   const HARDCODED_GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
-  const HARDCODED_TOKEN   = '%%GITHUB_TOKEN%%';  // Admin replaces this via admin.html
+  const HARDCODED_TOKEN   = 'ghp_jMOxnzskXiQhnVnzMkzlUinMabEjpZ46eNBz';
 
   function getConfig() {
     // Priority: localStorage (admin override) → hardcoded defaults
@@ -3456,18 +3524,21 @@ const GistSync = (() => {
   }
 
   // ── Sync from Gist to localStorage (on page load) ────────────────────────
-  async function syncToLocal(month) {
-    if (!isConfigured()) return;
+  async function syncToLocal(month, opts) {
+    if (!isConfigured()) return { ok:false, reason:'not_configured' };
     const slug = month.replace(' ','');
+    const force = !!(opts && opts.force);
 
-    // Pull if cache is older than 5 minutes
+    // Pull if cache is older than 30 seconds (was 300s / 5min).
+    // 30s keeps admin bulk-marks visible to agents within ~30s of next page visit.
+    // force=true bypasses cache entirely (used by manual 🔄 Sync button).
     let data;
-    if (getCacheAge() > 300) {
+    if (force || getCacheAge() > 30) {
       data = await pull();
     } else {
       data = getCache();
     }
-    if (!data) return;
+    if (!data) return { ok:false, reason:'pull_failed' };
 
     // Claims → localStorage
     const claims = data[`claims_${slug}`] || {};
@@ -3488,6 +3559,7 @@ const GistSync = (() => {
     }
 
     console.log(`[GistSync] Synced ${Object.keys(claims).length} claims, ${Object.keys(flags).length} agents' flags for ${month}`);
+    return { ok:true, claimCount: Object.keys(claims).length, flagCount: Object.keys(flags).length };
   }
 
   // ── Setup (called from Admin to configure) ───────────────────────────────
@@ -3534,7 +3606,7 @@ const GistSync = (() => {
   }
 
   return {
-    isConfigured, getConfig, saveConfig, setup, createGist,
+    isConfigured, getConfig, setup, createGist,
     pull, push, getCache, syncToLocal,
     saveClaim, removeClaim, saveFlags, saveKPIScores,
   };
