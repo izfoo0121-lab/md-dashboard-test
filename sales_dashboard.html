@@ -887,6 +887,17 @@ async function switchMonth(slug) {
 
 // ── Load Data ──────────────────────────────────────────────────────────────
 async function loadData() {
+  // Auto-configure GistSync from gist_config.json (permanent, never overwritten by bat)
+  try {
+    const cr = await fetch('gist_config.json?v='+Date.now());
+    if (cr.ok) {
+      const cfg = await cr.json();
+      if (cfg.gist_token && cfg.gist_id && typeof GistSync !== 'undefined' && !GistSync.isConfigured()) {
+        GistSync.saveConfig({ gist_id: cfg.gist_id, token: cfg.gist_token });
+      }
+    }
+  } catch(e) {}
+
   try {
     const bust = Date.now();
     const r = await fetch('dashboard_data.json?v='+Date.now());
