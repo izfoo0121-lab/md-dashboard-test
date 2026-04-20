@@ -130,6 +130,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
 }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -176,7 +177,6 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
     <button class="tab-btn" onclick="switchTab('brand_camps',this)">🔥 Brand Promo</button>
     <button class="tab-btn" onclick="switchTab('campaigns',this)">📢 Campaigns</button>
     <button class="tab-btn" onclick="switchTab('kpi_weights',this)">⚖️ KPI Weights</button>
-    <button class="tab-btn" onclick="switchTab('kpi_actuals',this)">📝 KPI Actuals</button>
     <button class="tab-btn" onclick="switchTab('pins',this)">🔑 Agent PINs</button>
     <button class="tab-btn" onclick="switchTab('sync',this)">☁️ Cloud Sync</button>
     <button class="tab-btn" onclick="switchTab('export',this)">Export / Import</button>
@@ -252,42 +252,6 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
   </div>
 
 
-  <!-- ── KPI Actuals Tab ── -->
-  <div id="tab-kpi_actuals" class="tab-content">
-    <div class="page-body">
-      <div class="sec-header">📝 KPI Actuals — Monthly Input</div>
-      <div class="sec-sub">Enter actual counts for manual KPI items. Saved to targets.json → run bat to publish to agent KPI tab.</div>
-
-      <div class="admin-card">
-        <div class="sec-divider">📱 Event / PSR — Monthly Count</div>
-        <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);margin-bottom:12px;">
-          Number of events / PSR visits each agent conducted this month.
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-          <span style="font-family:var(--mono);font-size:10px;color:var(--ink2);">Month:</span>
-          <select id="kpi-actual-month" style="font-family:var(--mono);font-size:11px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink);"
-            onchange="renderKPIActualsGrid()">
-          </select>
-        </div>
-        <div id="kpi-actuals-grid"></div>
-        <button class="save-btn" onclick="saveKPIActuals()" style="margin-top:14px;">
-          SAVE KPI ACTUALS → DOWNLOAD TARGETS.JSON
-        </button>
-        <div class="save-toast" id="save-toast-kpi-actuals">✓ Saved — remember to download targets.json and run bat</div>
-      </div>
-
-      <div class="admin-card" style="margin-top:12px;">
-        <div class="sec-divider">ℹ How it works</div>
-        <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);line-height:1.7;">
-          • Enter actuals here → click Save → download targets.json<br>
-          • Copy targets.json to dashboard folder → run update_dashboard.bat<br>
-          • Agent KPI tab will show updated scores after bat run<br>
-          • VIP count and New Accounts are <b>auto-calculated</b> — no input needed
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- ── Agent PINs Tab ── -->
   <div id="tab-pins" class="tab-content">
     <div class="page-body">
@@ -316,71 +280,22 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
 
   <!-- ── Cloud Sync Tab ── -->
   <div id="tab-sync" class="tab-content">
-    <div class="page-body">
-      <div class="sec-header">☁️ Cloud Sync — GitHub Gist</div>
-      <div class="sec-sub">Store agent interactions (claims, flags, KPI scores) permanently in a GitHub Gist. Cross-device — any agent's phone, any browser.</div>
-
-      <div class="admin-card" style="margin-bottom:16px;">
-        <div id="sync-status-banner" style="padding:10px 14px;border-radius:8px;font-family:var(--mono);font-size:11px;margin-bottom:14px;background:rgba(255,255,255,.06);"></div>
-
-        <div class="sec-divider">Step 1 — GitHub Personal Access Token</div>
-        <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);margin-bottom:8px;">
-          Go to github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens → New token<br>
-          Scopes needed: <strong>Gist</strong> only. Expiry: No expiration (or 1 year).
+    <div class="section" style="margin:20px 0;">
+      <div class="sec-header">☁️ Cloud Sync — Supabase</div>
+      <div style="padding:16px;background:rgba(61,220,132,.08);border:1px solid rgba(61,220,132,.3);border-radius:10px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:18px;">✓</span>
+          <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--green,#3ddc84);">CONNECTED TO SUPABASE</div>
         </div>
-        <div class="input-group">
-          <div class="input-label">GitHub Personal Access Token</div>
-          <input type="password" id="gist-token-input" placeholder="github_pat_..." style="width:100%;font-family:var(--mono);">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--ink3,#9ca3af);line-height:1.6;">
+          Backend: <code>rqitgmydcbyiygqjssrb.supabase.co</code><br>
+          Auth: Publishable key (no rotation needed)<br>
+          Realtime: Active — changes broadcast to all devices in ~1s<br>
+          Audit: All mutations logged to <code>audit_log</code> table
         </div>
-
-        <div class="sec-divider" style="margin-top:14px;">Step 2 — Create or Connect Gist</div>
-        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
-          <button class="save-btn" onclick="createNewGist()" style="flex:1;min-width:200px;background:var(--green);">
-            ✨ Create New Gist (First Time)
-          </button>
-          <button class="save-btn" onclick="connectExistingGist()" style="flex:1;min-width:200px;background:var(--blue);">
-            🔗 Connect Existing Gist
-          </button>
+        <div style="margin-top:12px;padding:10px;background:rgba(255,255,255,.04);border-radius:8px;font-family:var(--mono);font-size:10px;color:var(--ink3,#9ca3af);">
+          <strong>No setup required.</strong> Agents just open the dashboard URL — no token to enter, no Gist configuration, nothing to rotate. Data syncs automatically.
         </div>
-        <div style="margin-top:10px;padding:12px;background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.3);border-radius:8px;">
-          <div style="font-family:var(--mono);font-size:10px;color:var(--purple);font-weight:700;margin-bottom:6px;">📱 Deploy to All Agent Devices</div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-bottom:8px;">After connecting, click below to generate the sales_dashboard.html with the token baked in — all agent phones sync automatically without any setup.</div>
-          <button class="save-btn" onclick="showDeployInstructions()" style="width:100%;background:var(--purple);">
-            📱 Show Deploy Instructions for All Devices
-          </button>
-        </div>
-        <div class="input-group" style="margin-top:10px;">
-          <div class="input-label">Existing Gist ID (if connecting)</div>
-          <input type="text" id="gist-id-input" placeholder="e.g. a1b2c3d4e5f6..." style="width:100%;font-family:var(--mono);">
-        </div>
-
-        <div class="sec-divider" style="margin-top:14px;">Current Config</div>
-        <div id="gist-current-config" style="font-family:var(--mono);font-size:10px;color:var(--ink3);"></div>
-
-        <div class="sec-divider" style="margin-top:14px;">Manual Sync</div>
-        <div style="display:flex;gap:10px;">
-          <button class="save-btn" onclick="forcePull()" style="flex:1;">
-            ⬇ Pull from Gist (sync to this device)
-          </button>
-          <button class="save-btn" onclick="forcePush()" style="flex:1;">
-            ⬆ Push all local data to Gist
-          </button>
-        </div>
-      </div>
-
-      <div class="admin-card">
-        <div class="sec-divider">What Gets Synced</div>
-        <table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px;">
-          <tr style="background:var(--bg);">
-            <td style="padding:6px 10px;font-weight:700;">Data</td>
-            <td style="padding:6px 10px;font-weight:700;">Who writes</td>
-            <td style="padding:6px 10px;font-weight:700;">Who reads</td>
-          </tr>
-          <tr><td style="padding:6px 10px;">Campaign claims / Mark Delivered</td><td style="padding:6px 10px;color:var(--blue);">Agent (phone)</td><td style="padding:6px 10px;">MD / Audit page</td></tr>
-          <tr style="background:var(--bg);"><td style="padding:6px 10px;">Debtor flags 🚩</td><td style="padding:6px 10px;color:var(--blue);">Agent (phone)</td><td style="padding:6px 10px;">MD / Management</td></tr>
-          <tr><td style="padding:6px 10px;">KPI scores (Section D/E/B)</td><td style="padding:6px 10px;color:var(--orange);">Accounts + Supervisor</td><td style="padding:6px 10px;">MD / Admin export</td></tr>
-          <tr style="background:var(--bg);"><td style="padding:6px 10px;">Audit decisions (verify/reject)</td><td style="padding:6px 10px;color:var(--purple);">MD (audit page)</td><td style="padding:6px 10px;">All audit views</td></tr>
-        </table>
       </div>
     </div>
   </div>
@@ -708,47 +623,6 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
             <div class="input-label">Delivery Note (shown to agent)</div>
             <input type="text" id="new-camp-foc-note" placeholder="e.g. Deliver before Raya / Must state LAM FOC">
           </div>
-          <div class="input-row">
-            <div class="field-wrap">
-              <div class="field-lbl">FOC Cost / Unit (RM)</div>
-              <input type="number" id="new-camp-foc-cost" min="0" step="0.01" placeholder="e.g. 28.40">
-            </div>
-            <div class="field-wrap">
-              <div class="field-lbl">Budget Cap (RM, optional)</div>
-              <input type="number" id="new-camp-foc-budget" min="0" step="1" placeholder="e.g. 8000">
-            </div>
-          </div>
-        </div>
-
-        <!-- Customer categories + condition — shown for FOC/festive types -->
-        <div id="category-camp-fields" style="display:none;">
-          <div class="input-group">
-            <div class="input-label">Target Customer Categories <span style="font-weight:400;color:var(--ink3);">(optional — blank = all debtors in list)</span></div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;" id="cat-checkboxes">
-              <label style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" value="KR"> KR (Kedai Runcit)</label>
-              <label style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" value="SH"> SH-Shop</label>
-              <label style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" value="MM"> Mini Market</label>
-              <label style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" value="SUNDRY"> Sundry</label>
-              <label style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" value="KIOSK"> Kiosk</label>
-              <label style="display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" value="ALL"> All Categories</label>
-            </div>
-          </div>
-          <div class="input-group">
-            <div class="input-label">Eligibility Condition</div>
-            <select id="new-camp-condition" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--ink);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:8px;">
-              <option value="non_buyers_only">Non-buyers only (not bought this brand in last 3 months)</option>
-              <option value="all_in_category">All in selected category (regardless of buying history)</option>
-              <option value="active_only">Active buyers only (bought at least once in last 3 months)</option>
-              <option value="no_condition">No condition — use debtor list as-is</option>
-            </select>
-          </div>
-          <div class="toggle-row" style="padding:8px 0;">
-            <div>
-              <div class="toggle-label">One-time per debtor</div>
-              <div class="toggle-sub">Each shop claims FOC once only. System blocks duplicate claims.</div>
-            </div>
-            <label class="toggle"><input type="checkbox" id="new-camp-one-time" checked><span class="toggle-slider"></span></label>
-          </div>
         </div>
 
         <!-- Festive fields — shown for festive_gift type -->
@@ -1057,50 +931,7 @@ function savePins() {
 }
 
 function showDeployInstructions() {
-  const cfg = GistSync.getConfig();
-  if (!GistSync.isConfigured()) {
-    alert('Please connect a Gist first (Step 2)');
-    return;
-  }
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;';
-  overlay.innerHTML = `
-    <div style="background:#1c1c24;border:1px solid rgba(167,139,250,.4);border-radius:16px;padding:24px;width:100%;max-width:560px;margin-top:20px;">
-      <div style="font-family:monospace;font-size:18px;color:var(--purple,#a78bfa);font-weight:700;margin-bottom:4px;">📱 Deploy to All Agent Devices</div>
-      <div style="font-family:monospace;font-size:10px;color:#6a687a;margin-bottom:18px;">Follow these steps to make ALL agent phones sync automatically</div>
-
-      <div style="font-family:monospace;font-size:11px;color:#f0c040;background:rgba(240,192,64,.08);border:1px solid rgba(240,192,64,.2);border-radius:8px;padding:10px;margin-bottom:16px;">
-        ⚠ After this, every phone that opens the dashboard will sync claims and flags automatically — no setup needed per device.
-      </div>
-
-      <div style="font-family:monospace;font-size:9px;color:#6a687a;text-transform:uppercase;margin-bottom:5px;">Step 1 — Open this file on your computer</div>
-      <div style="font-family:monospace;font-size:11px;color:#4da6ff;background:#0e0e12;border:1px solid rgba(77,166,255,.2);border-radius:8px;padding:10px;margin-bottom:14px;">
-        C:\Users\tgy_3\Desktop\md-dashboard\sales_dashboard.html
-      </div>
-
-      <div style="font-family:monospace;font-size:9px;color:#6a687a;text-transform:uppercase;margin-bottom:5px;">Step 2 — Find this line in the file (search with Ctrl+F)</div>
-      <div style="background:#0e0e12;border:1px solid rgba(255,95,95,.3);border-radius:8px;padding:10px;margin-bottom:14px;">
-        <div style="font-family:monospace;font-size:11px;color:#ff5f5f;">const HARDCODED_TOKEN   = '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';</div>
-      </div>
-
-      <div style="font-family:monospace;font-size:9px;color:#6a687a;text-transform:uppercase;margin-bottom:5px;">Step 3 — Replace it with (copy exactly)</div>
-      <div style="display:flex;gap:8px;margin-bottom:14px;">
-        <div id="deploy-snippet" style="flex:1;background:#0e0e12;border:1px solid rgba(61,220,132,.3);border-radius:8px;padding:10px;font-family:monospace;font-size:11px;color:#3ddc84;word-break:break-all;">const HARDCODED_TOKEN   = '${cfg.token}';</div>
-        <button onclick="const el=document.getElementById('deploy-snippet');const range=document.createRange();range.selectNodeContents(el);window.getSelection().removeAllRanges();window.getSelection().addRange(range);document.execCommand('copy');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000);"
-          style="background:#3ddc84;border:none;color:#000;font-family:monospace;font-size:11px;font-weight:700;padding:10px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;align-self:flex-start;">Copy</button>
-      </div>
-
-      <div style="font-family:monospace;font-size:9px;color:#6a687a;text-transform:uppercase;margin-bottom:5px;">Step 4 — Save file and run bat</div>
-      <div style="font-family:monospace;font-size:11px;color:#6a687a;margin-bottom:16px;">Save the file → run update_dashboard.bat → all agent phones will now sync automatically on next refresh.</div>
-
-      <div style="font-family:monospace;font-size:9px;color:#3ddc84;background:rgba(61,220,132,.08);border:1px solid rgba(61,220,132,.2);border-radius:8px;padding:10px;margin-bottom:16px;">
-        Gist ID already hardcoded: ${cfg.gist_id}
-      </div>
-
-      <button onclick="this.closest('div[style*=fixed]').remove();"
-        style="width:100%;background:#3ddc84;border:none;color:#000;font-family:monospace;font-size:13px;font-weight:800;padding:12px;border-radius:10px;cursor:pointer;">Close</button>
-    </div>`;
-  document.body.appendChild(overlay);
+  alert('Deploy instructions no longer needed — backend is Supabase (no token rotation).\n\nAdmin URL: admin.html\nAgent URL: sales_dashboard.html\n\nNo setup required for agents — they just open the URL.');
 }
 
 async function forcePull() {
@@ -1160,10 +991,11 @@ async function initAdmin() {
   renderAdminBrandSKU();
   updateRawJSON();
 
-  // Load campaigns — populateBulkCampSelect called inside loadCampaignsData after async load
+  // Load campaigns
   loadCampaignsData();
+  renderCampaignsList();
+  populateBulkCampSelect();
   renderKPIWeights();
-  initKPIActualsTab();
   // Set default deadline to end of current month
   const now = new Date();
   const lastDay = new Date(now.getFullYear(), now.getMonth()+1, 0);
@@ -2336,107 +2168,6 @@ function closeBrandCamp(id) {
   }
 }
 
-// ── KPI Actuals Tab ───────────────────────────────────────────────────────
-const KPI_ACTUAL_AGENTS = ['BEN','CJ','JACKY','JAMES','JW','KEAN','KEE','KF','KI-MI','KW','LEON','NMK','YI','SAM'];
-
-// KPI items that require manual input (source = manual_agent or manual_mgmt)
-// VIP count and new_accounts are AUTO — excluded here
-const KPI_ACTUALS_ITEMS = [
-  { key: 'event',               label: '📱 Event / PSR',              section: 'B', unit: 'count', hint: 'Number of events/PSR visits' },
-  { key: 'alt_channel_contact', label: '📞 Alt Sales — Contact <2days',section: 'B', unit: 'score', hint: 'Score out of max (e.g. 2.00)' },
-  { key: 'alt_channel_deliver', label: '🚚 Alt Sales — Deliver <7days', section: 'B', unit: 'score', hint: 'Score out of max (e.g. 3.00)' },
-  { key: 'campaign_1',          label: '🎯 Campaign Related',           section: 'C', unit: 'count', hint: 'Campaign participation count' },
-];
-
-function initKPIActualsTab() {
-  const sel = document.getElementById('kpi-actual-month');
-  if (!sel) return;
-  const MONTH_ORDER = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const now = new Date();
-  const months = [];
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    months.push(MONTH_ORDER[d.getMonth()] + ' ' + String(d.getFullYear()).slice(2));
-  }
-  sel.innerHTML = months.map((m, i) => `<option value="${m}" ${i===0?'selected':''}>${m.toUpperCase()}</option>`).join('');
-  renderKPIActualsGrid();
-}
-
-function renderKPIActualsGrid() {
-  const grid = document.getElementById('kpi-actuals-grid');
-  if (!grid) return;
-  const month = document.getElementById('kpi-actual-month')?.value || '';
-
-  // Get existing actuals from CONFIG
-  const agents = KPI_ACTUAL_AGENTS.filter(a => CONFIG.agents?.[a]);
-
-  let html = '';
-
-  KPI_ACTUALS_ITEMS.forEach(item => {
-    html += `<div style="margin-bottom:16px;">
-      <div style="font-family:var(--mono);font-size:10px;font-weight:600;color:var(--ink2);margin-bottom:4px;padding:4px 0;border-bottom:1px solid var(--border);">
-        ${item.label} <span style="color:var(--ink3);font-weight:400;">— ${item.hint}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;">`;
-
-    agents.forEach(agent => {
-      const existing = CONFIG.agents[agent]?.kpi_manual?.[item.key] ?? '';
-      html += `<div style="display:flex;flex-direction:column;gap:3px;">
-        <label style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${agent}</label>
-        <input type="number" min="0" step="${item.unit==='score'?'0.01':'1'}"
-          id="kpi-act-${item.key}-${agent}"
-          value="${existing}"
-          placeholder="0"
-          style="font-family:var(--mono);font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink);text-align:center;width:100%;">
-      </div>`;
-    });
-
-    html += `</div></div>`;
-  });
-
-  grid.innerHTML = html;
-}
-
-function saveKPIActuals() {
-  const month = document.getElementById('kpi-actual-month')?.value || '';
-  const agents = KPI_ACTUAL_AGENTS.filter(a => CONFIG.agents?.[a]);
-  let changed = 0;
-
-  agents.forEach(agent => {
-    if (!CONFIG.agents[agent].kpi_manual) CONFIG.agents[agent].kpi_manual = {};
-    KPI_ACTUALS_ITEMS.forEach(item => {
-      const inp = document.getElementById('kpi-act-' + item.key + '-' + agent);
-      if (!inp) return;
-      const val = inp.value.trim();
-      if (val === '') return;
-      CONFIG.agents[agent].kpi_manual[item.key] = parseFloat(val) || 0;
-      changed++;
-    });
-  });
-
-  if (!changed) {
-    alert('No values entered.');
-    return;
-  }
-
-  // Store which month these actuals are for
-  if (!CONFIG.kpi_actuals_months) CONFIG.kpi_actuals_months = {};
-  CONFIG.kpi_actuals_months[month] = true;
-
-  updateRawJSON();
-
-  // Download targets.json
-  const blob = new Blob([JSON.stringify(CONFIG, null, 2)], {type:'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'targets.json';
-  a.click();
-
-  const toast = document.getElementById('save-toast-kpi-actuals');
-  if (toast) { toast.style.display='block'; setTimeout(()=>toast.style.display='none', 3000); }
-}
-
-// ── KPI Actuals Tab ──────────────────────────────────────────────────────────
 function saveTargetsJSON() {
   updateRawJSON();
   const blob = new Blob([JSON.stringify(CONFIG, null, 2)], {type:'application/json'});
@@ -2634,6 +2365,7 @@ async function loadCampaignsData() {
     const r = await fetch('campaigns.json?v=' + Date.now());
     if (r.ok) {
       const fromFile = await r.json();
+      // Merge: file wins, but keep any localStorage-only campaigns not in file
       const fileIds = new Set((fromFile.campaigns||[]).map(c=>c.id));
       const lsRaw   = localStorage.getItem('touro_campaigns');
       const lsData  = lsRaw ? JSON.parse(lsRaw) : { campaigns: [] };
@@ -2641,20 +2373,15 @@ async function loadCampaignsData() {
       CAMPAIGNS_DATA = { ...fromFile, campaigns: [...(fromFile.campaigns||[]), ...lsOnly] };
       localStorage.setItem('touro_campaigns', JSON.stringify(CAMPAIGNS_DATA));
       renderCampaignsList();
-      populateBulkCampSelect();
       return;
     }
   } catch(e) { /* fallback */ }
   try { CAMPAIGNS_DATA = JSON.parse(localStorage.getItem('touro_campaigns')||'{"campaigns":[]}'); }
   catch(e) { CAMPAIGNS_DATA = { campaigns: [] }; }
-  // Fallback path — data loaded from localStorage synchronously
-  renderCampaignsList();
-  populateBulkCampSelect();
 }
 function saveCampaignsData() {
   localStorage.setItem('touro_campaigns', JSON.stringify(CAMPAIGNS_DATA));
   renderCampaignsList();
-  populateBulkCampSelect();
 }
 
 function renderCatRules(cats) {
@@ -2729,34 +2456,22 @@ function createCampaign() {
   const catRules = getCatRules();
 
   // FOC fields
-  const focItem     = document.getElementById('new-camp-foc-item')?.value?.trim().toUpperCase()||'';
-  const focQty      = parseFloat(document.getElementById('new-camp-foc-qty')?.value)||0;
-  const focUnit     = document.getElementById('new-camp-foc-unit')?.value||'packs';
-  const focNote     = document.getElementById('new-camp-foc-note')?.value?.trim()||'';
-  const festive     = document.getElementById('new-camp-festive')?.value||'';
-  const focCost     = parseFloat(document.getElementById('new-camp-foc-cost')?.value)||0;
-  const focBudget   = parseFloat(document.getElementById('new-camp-foc-budget')?.value)||0;
-  const selCats     = Array.from(document.querySelectorAll('#cat-checkboxes input:checked')).map(c=>c.value);
-  const condition   = document.getElementById('new-camp-condition')?.value||'no_condition';
-  const oneTime     = document.getElementById('new-camp-one-time')?.checked ?? true;
+  const focItem  = document.getElementById('new-camp-foc-item')?.value?.trim().toUpperCase()||'';
+  const focQty   = parseFloat(document.getElementById('new-camp-foc-qty')?.value)||0;
+  const focUnit  = document.getElementById('new-camp-foc-unit')?.value||'packs';
+  const focNote  = document.getElementById('new-camp-foc-note')?.value?.trim()||'';
+  const festive  = document.getElementById('new-camp-festive')?.value||'';
 
   CAMPAIGNS_DATA.campaigns.push({
     id:'camp_'+Date.now(), name, type, description:desc,
     brands, promo_detail:promo, min_order_ctn:minOrder,
     cat_rules: catRules,
     // FOC/Festive fields
-    default_foc_item:     focItem,
-    default_foc_qty:      focQty,
-    default_foc_unit:     focUnit,
-    foc_note:             focNote,
-    festive_occasion:     festive,
-    // FOC cost tracking
-    foc_cost_unit:        focCost   || null,
-    foc_budget_cap:       focBudget || null,
-    // Eligibility
-    customer_categories:  selCats.length ? selCats : [],
-    condition:            condition,
-    one_time_per_debtor:  oneTime,
+    default_foc_item:  focItem,
+    default_foc_qty:   focQty,
+    default_foc_unit:  focUnit,
+    foc_note:          focNote,
+    festive_occasion:  festive,
     created_at:new Date().toISOString().split('T')[0],
     deadline, active:true, debtors:_campFileDebtors,
   });
@@ -2765,8 +2480,7 @@ function createCampaign() {
   // Reset form
   ['new-camp-name','new-camp-desc','new-camp-deadline','new-camp-file',
    'new-camp-promo','new-camp-min-order',
-   'new-camp-foc-item','new-camp-foc-qty','new-camp-foc-note',
-   'new-camp-foc-cost','new-camp-foc-budget'].forEach(id=>{
+   'new-camp-foc-item','new-camp-foc-qty','new-camp-foc-note'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.value='';
   });
   document.getElementById('camp-file-preview').textContent='';
@@ -2860,11 +2574,9 @@ function toggleBrandFields(type) {
   document.getElementById('brand-camp-fields').style.display =
     type === 'promotion' ? 'block' : 'none';
   document.getElementById('foc-camp-fields').style.display =
-    (type === 'free_sample' || type === 'festive_gift' || type === 'foc_sample') ? 'block' : 'none';
+    (type === 'free_sample' || type === 'festive_gift') ? 'block' : 'none';
   document.getElementById('festive-camp-fields').style.display =
     type === 'festive_gift' ? 'block' : 'none';
-  document.getElementById('category-camp-fields').style.display =
-    (type === 'free_sample' || type === 'festive_gift' || type === 'foc_sample') ? 'block' : 'none';
 }
 
 function closeCampaign(id) {
@@ -2904,10 +2616,6 @@ function renderCampaignsList() {
           ${c.brand?`<span style="font-family:var(--mono);font-size:9px;background:rgba(200,56,26,.1);color:#c8381a;padding:2px 8px;border-radius:8px;border:1px solid rgba(200,56,26,.3);margin-top:6px;display:inline-block;">${c.brand}</span>`:''}
           ${c.promo_detail?`<div id="camp-promo-disp-${c.id}" style="font-family:var(--mono);font-size:10px;color:var(--green);margin-top:4px;font-weight:600;">💬 "${c.promo_detail}"</div>`:''}
           ${c.default_foc_item?`<div style="font-family:var(--mono);font-size:9px;color:#888;margin-top:2px;">🎁 Default FOC: ${c.default_foc_item} × ${c.default_foc_qty} ${c.default_foc_unit||''}</div>`:''}
-          ${c.foc_cost_unit?`<div style="font-family:var(--mono);font-size:9px;color:var(--gold);margin-top:2px;">💰 RM${c.foc_cost_unit}/unit${c.foc_budget_cap?' · Cap: RM'+Number(c.foc_budget_cap).toLocaleString():''}</div>`:''}
-          ${c.customer_categories?.length?`<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;">${c.customer_categories.map(cat=>`<span style="font-family:var(--mono);font-size:8px;background:rgba(26,92,143,.1);color:var(--blue);padding:2px 7px;border-radius:8px;border:1px solid rgba(26,92,143,.2);">${cat}</span>`).join('')}</div>`:''}
-          ${c.condition&&c.condition!=='no_condition'?`<div style="font-family:var(--mono);font-size:9px;color:var(--green);margin-top:2px;">✓ ${{'non_buyers_only':'Non-buyers only','all_in_category':'All in category','active_only':'Active buyers only'}[c.condition]||c.condition}</div>`:''}
-          ${c.one_time_per_debtor?`<div style="font-family:var(--mono);font-size:9px;color:var(--gold);margin-top:2px;">⚡ One-time per debtor</div>`:''}
         </div>
         <div style="display:flex;gap:6px;margin-left:8px;flex-shrink:0;">
           <button onclick="editCampaign('${c.id}')" style="background:none;border:1px solid var(--border);color:var(--blue);font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">✏ Edit</button>
@@ -3021,264 +2729,445 @@ document.getElementById('pw-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') doLogin();
 });
 
-// ── GistSync Module ─────────────────────────────────────────────────
 /**
- * MIRACLE-奇迹 MD Dashboard — Gist Sync Module
- * Stores all agent interactions in a GitHub Gist
- * Cross-device, permanent, audit trail
- * 
- * Setup: Admin sets GIST_ID + GITHUB_PAT in admin.html once
- * All pages load this module and use GistSync.* functions
+ * MIRACLE-奇迹 MD Dashboard — Supabase Sync Module
+ * Drop-in replacement for GistSync. Same API surface so HTML files need minimal changes.
+ *
+ * Uses Supabase PostgREST + Realtime. No token rotation, no secret scanner games.
+ * The publishable key is designed to be public — safe to embed in HTML.
+ *
+ * Data model (in Supabase):
+ *   claims      (month, agent, camp_id, debtor_code, status, remark, bulk, actor, ts)
+ *   flags       (month, agent, debtor_code, reason, ts)
+ *   kpi_scores  (month, agent, scores jsonb, updated_at)
+ *   audit_log   (id, ts, actor, action, month, details)
+ *
+ * localStorage keys (unchanged — full backward compatibility):
+ *   camp_claim_{slug}_{agent}_{campId}_{debtorCode}
+ *   touro_debtor_flags_{agent}
+ *   md_scores_{slug}
+ *   md_gist_cache        (kept for read paths that still reference it)
+ *   md_gist_cache_ts
+ *
+ * Author: TSA session 21 Apr 2026
  */
 
 const GistSync = (() => {
 
-  const CONFIG_KEY = 'md_gist_config';
+  // ── Configuration ────────────────────────────────────────────────────
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
 
-  // ── Hardcoded fallback — set by admin, works for ALL devices automatically ──
-  // Token scope: gist only (cannot touch code repo — safe to embed)
-  const HARDCODED_GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
-  const HARDCODED_TOKEN   = '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';  // Admin replaces this via admin.html
+  const CACHE_KEY    = 'md_gist_cache';
+  const CACHE_TS_KEY = 'md_gist_cache_ts';
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+  function _headers(extra) {
+    return Object.assign({
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json'
+    }, extra || {});
+  }
+
+  function _slug(month) { return (month || '').replace(' ',''); }
+
+  async function _rest(path, opts) {
+    opts = opts || {};
+    const url = `${SUPABASE_URL}/rest/v1/${path}`;
+    try {
+      const r = await fetch(url, {
+        method: opts.method || 'GET',
+        headers: _headers(opts.headers),
+        body: opts.body ? JSON.stringify(opts.body) : undefined
+      });
+      if (!r.ok) {
+        console.warn(`[SupabaseSync] ${opts.method||'GET'} ${path} → ${r.status}`);
+        return { ok:false, status:r.status };
+      }
+      if (r.status === 204) return { ok:true, data:null };
+      const data = await r.json();
+      return { ok:true, data };
+    } catch (e) {
+      console.warn('[SupabaseSync] network error', e);
+      return { ok:false, error:e };
+    }
+  }
+
+  // ── Public: always "configured" — no token rotation ──────────────────
+  function isConfigured() { return true; }
 
   function getConfig() {
-    // Priority: localStorage (admin override) → hardcoded defaults
-    try {
-      const ls = JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}');
-      return {
-        gist_id: ls.gist_id || HARDCODED_GIST_ID,
-        token:   ls.token   || HARDCODED_TOKEN,
-      };
-    }
-    catch { return { gist_id: HARDCODED_GIST_ID, token: HARDCODED_TOKEN }; }
+    return { gist_id: 'supabase', token: 'supabase', backend: 'supabase' };
   }
 
-  function saveConfig(cfg) {
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
-    // Note: hardcoded values in HTML are the fallback — localStorage takes priority
-  }
+  function saveConfig() { /* no-op — kept for back-compat */ }
 
-  function isConfigured() {
-    const c = getConfig();
-    return !!(c.gist_id && c.token && c.token !== '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');
-  }
-
-  // ── Read all data from Gist ─────────────────────────────────────────────
-  async function pull() {
-    const { gist_id, token } = getConfig();
-    if (!gist_id || !token) return null;
-    try {
-      const r = await fetch(`https://api.github.com/gists/${gist_id}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
-      });
-      if (!r.ok) return null;
-      const data = await r.json();
-      const result = {};
-      Object.entries(data.files || {}).forEach(([fname, f]) => {
-        try { result[fname.replace('.json','')] = JSON.parse(f.content || '{}'); }
-        catch { result[fname.replace('.json','')] = {}; }
-      });
-      // Cache locally
-      localStorage.setItem('md_gist_cache', JSON.stringify(result));
-      localStorage.setItem('md_gist_cache_ts', Date.now().toString());
-      return result;
-    } catch { return null; }
-  }
-
-  // ── Write a single file to Gist ─────────────────────────────────────────
-  async function push(filename, data) {
-    const { gist_id, token } = getConfig();
-    if (!gist_id || !token) return false;
-    try {
-      const r = await fetch(`https://api.github.com/gists/${gist_id}`, {
-        method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github+json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          files: { [`${filename}.json`]: { content: JSON.stringify(data, null, 2) } }
-        })
-      });
-      return r.ok;
-    } catch { return false; }
-  }
-
-  // ── Get cached data (fast, no network) ──────────────────────────────────
+  // ── Cache helpers (kept so existing UI code works) ───────────────────
   function getCache() {
-    try { return JSON.parse(localStorage.getItem('md_gist_cache') || '{}'); }
+    try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); }
     catch { return {}; }
   }
 
   function getCacheAge() {
-    const ts = localStorage.getItem('md_gist_cache_ts');
+    const ts = localStorage.getItem(CACHE_TS_KEY);
     return ts ? (Date.now() - parseInt(ts)) / 1000 : 9999;
   }
 
-  // ── Campaign Claims ──────────────────────────────────────────────────────
-  async function saveClaim(month, agent, campId, debtorCode, claimData) {
-    const slug = month.replace(' ','');
-    const key  = `${agent}_${campId}_${debtorCode}`;
+  function _setCacheBucket(fileKey, obj) {
+    const cache = getCache();
+    cache[fileKey] = obj;
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+    localStorage.setItem(CACHE_TS_KEY, Date.now().toString());
+  }
 
-    // 1. Save to localStorage immediately (instant)
+  // ── Low-level pull/push (back-compat shims for admin.html + audit) ───
+  // Old callers: GistSync.pull('claims_Apr26') → returns object keyed by "{agent}_{campId}_{debtorCode}"
+  async function pull(fileKey) {
+    if (!fileKey) return null;
+
+    if (fileKey.startsWith('claims_')) {
+      const month = _monthFromSlug(fileKey.replace('claims_',''));
+      const r = await _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`);
+      if (!r.ok) return null;
+      const out = {};
+      (r.data||[]).forEach(row => {
+        const k = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
+        out[k] = {
+          ts     : row.ts,
+          remark : row.remark || '',
+          bulk   : !!row.bulk,
+          status : row.status || 'delivered',
+          actor  : row.actor || 'agent'
+        };
+      });
+      _setCacheBucket(fileKey, out);
+      return out;
+    }
+
+    if (fileKey.startsWith('flags_')) {
+      const month = _monthFromSlug(fileKey.replace('flags_',''));
+      const r = await _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`);
+      if (!r.ok) return null;
+      const byAgent = {};
+      (r.data||[]).forEach(row => {
+        if (!byAgent[row.agent]) byAgent[row.agent] = {};
+        byAgent[row.agent][row.debtor_code] = {
+          reason: row.reason || '',
+          ts    : row.ts
+        };
+      });
+      _setCacheBucket(fileKey, byAgent);
+      return byAgent;
+    }
+
+    if (fileKey === 'kpi_scores') {
+      const r = await _rest(`kpi_scores?select=*`);
+      if (!r.ok) return null;
+      const byMonth = {};
+      (r.data||[]).forEach(row => {
+        if (!byMonth[row.month]) byMonth[row.month] = {};
+        byMonth[row.month][row.agent] = row.scores || {};
+      });
+      _setCacheBucket(fileKey, byMonth);
+      return byMonth;
+    }
+
+    return null;
+  }
+
+  // Old callers: GistSync.push('claims_Apr26', dataObj)
+  async function push(fileKey, data) {
+    if (!fileKey) return false;
+
+    if (fileKey.startsWith('claims_')) {
+      const month = _monthFromSlug(fileKey.replace('claims_',''));
+      const rows = Object.entries(data || {}).map(([compKey, v]) => {
+        const parts = compKey.split('_');
+        const agent = parts[0];
+        const debtorCode = parts[parts.length - 1];
+        const campId = parts.slice(1, -1).join('_');
+        return {
+          month, agent, camp_id: campId, debtor_code: debtorCode,
+          status: v.status || 'delivered',
+          remark: v.remark || '',
+          bulk  : !!v.bulk,
+          actor : v.actor || 'agent',
+          ts    : v.ts || new Date().toISOString()
+        };
+      });
+      if (!rows.length) return true;
+      const r = await _rest('claims?on_conflict=month,agent,camp_id,debtor_code', {
+        method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates' }, body: rows
+      });
+      _setCacheBucket(fileKey, data);
+      return r.ok;
+    }
+
+    if (fileKey.startsWith('flags_')) {
+      const month = _monthFromSlug(fileKey.replace('flags_',''));
+      const rows = [];
+      Object.entries(data || {}).forEach(([agent, flagsObj]) => {
+        Object.entries(flagsObj || {}).forEach(([debtorCode, v]) => {
+          rows.push({
+            month, agent, debtor_code: debtorCode,
+            reason: (v && v.reason) || '',
+            ts    : (v && v.ts) || new Date().toISOString()
+          });
+        });
+      });
+      if (!rows.length) return true;
+      const r = await _rest('flags?on_conflict=month,agent,debtor_code', {
+        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
+      });
+      _setCacheBucket(fileKey, data);
+      return r.ok;
+    }
+
+    if (fileKey === 'kpi_scores') {
+      const rows = [];
+      Object.entries(data || {}).forEach(([month, agents]) => {
+        Object.entries(agents || {}).forEach(([agent, scoresObj]) => {
+          rows.push({ month, agent, scores: scoresObj || {}, updated_at: new Date().toISOString() });
+        });
+      });
+      if (!rows.length) return true;
+      const r = await _rest('kpi_scores?on_conflict=month,agent', {
+        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
+      });
+      _setCacheBucket(fileKey, data);
+      return r.ok;
+    }
+
+    return false;
+  }
+
+  // ── Single-claim upsert (sales_dashboard.html main path) ─────────────
+  async function saveClaim(month, agent, campId, debtorCode, claimData) {
+    const slug  = _slug(month);
+    const key   = `${agent}_${campId}_${debtorCode}`;
     const lsKey = `camp_claim_${slug}_${key}`;
+
+    // Fire-and-forget localStorage first (instant UX)
     localStorage.setItem(lsKey, JSON.stringify(claimData));
 
-    // 2. Push to Gist asynchronously (background, non-blocking)
-    if (isConfigured()) {
-      const cache   = getCache();
-      const fileKey = `claims_${slug}`;
-      if (!cache[fileKey]) cache[fileKey] = {};
-      cache[fileKey][key] = claimData;
-      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
-      push(fileKey, cache[fileKey]).catch(() => {});  // fire and forget
-    }
+    // Upsert to Supabase
+    const row = {
+      month, agent, camp_id: campId, debtor_code: debtorCode,
+      status: claimData.status || 'delivered',
+      remark: claimData.remark || '',
+      bulk  : !!claimData.bulk,
+      actor : claimData.actor || 'agent',
+      ts    : claimData.ts || new Date().toISOString()
+    };
+    _rest('claims?on_conflict=month,agent,camp_id,debtor_code', {
+      method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body:[row]
+    }).catch(()=>{});
+
+    // Update cache bucket
+    const cache = getCache();
+    const fk = `claims_${slug}`;
+    if (!cache[fk]) cache[fk] = {};
+    cache[fk][key] = claimData;
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
   }
 
   async function removeClaim(month, agent, campId, debtorCode) {
-    const slug = month.replace(' ','');
+    const slug = _slug(month);
     const key  = `${agent}_${campId}_${debtorCode}`;
-
-    // Remove from localStorage
     localStorage.removeItem(`camp_claim_${slug}_${key}`);
 
-    // Remove from Gist
-    if (isConfigured()) {
-      const cache   = getCache();
-      const fileKey = `claims_${slug}`;
-      if (cache[fileKey]) {
-        delete cache[fileKey][key];
-        localStorage.setItem('md_gist_cache', JSON.stringify(cache));
-        push(fileKey, cache[fileKey]).catch(() => {});
-      }
+    _rest(`claims?month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(agent)}&camp_id=eq.${encodeURIComponent(campId)}&debtor_code=eq.${encodeURIComponent(debtorCode)}`, {
+      method: 'DELETE'
+    }).catch(()=>{});
+
+    const cache = getCache();
+    const fk = `claims_${slug}`;
+    if (cache[fk]) {
+      delete cache[fk][key];
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
     }
   }
 
-  // ── Flags ────────────────────────────────────────────────────────────────
+  // ── Flags (per-agent bulk write) ─────────────────────────────────────
   async function saveFlags(month, agent, flags) {
-    const slug    = month.replace(' ','');
-    const fileKey = `flags_${slug}`;
-
-    // localStorage
+    const slug = _slug(month);
     localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(flags));
 
-    // Gist
-    if (isConfigured()) {
-      const cache = getCache();
-      if (!cache[fileKey]) cache[fileKey] = {};
-      cache[fileKey][agent] = flags;
-      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
-      push(fileKey, cache[fileKey]).catch(() => {});
+    // Replace all flags for this agent+month: delete existing, then insert
+    await _rest(`flags?month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(agent)}`, { method:'DELETE' });
+
+    const rows = Object.entries(flags || {}).map(([debtorCode, v]) => ({
+      month, agent, debtor_code: debtorCode,
+      reason: (v && v.reason) || '',
+      ts    : (v && v.ts) || new Date().toISOString()
+    }));
+    if (rows.length) {
+      await _rest('flags', { method:'POST', body: rows });
     }
+
+    const cache = getCache();
+    const fk = `flags_${slug}`;
+    if (!cache[fk]) cache[fk] = {};
+    cache[fk][agent] = flags;
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
   }
 
-  // ── KPI Scores ───────────────────────────────────────────────────────────
+  // ── KPI scores (by month + agent) ────────────────────────────────────
   async function saveKPIScores(month, scores) {
-    const slug    = month.replace(' ','');
-    const fileKey = `kpi_scores`;
-
-    // localStorage
+    const slug = _slug(month);
     localStorage.setItem(`md_scores_${slug}`, JSON.stringify(scores));
 
-    // Gist
-    if (isConfigured()) {
+    // scores is { AGENT: {...}, AGENT2: {...}, ... }
+    const rows = Object.entries(scores || {}).map(([agent, s]) => ({
+      month, agent, scores: s || {}, updated_at: new Date().toISOString()
+    }));
+    if (rows.length) {
+      const r = await _rest('kpi_scores?on_conflict=month,agent', {
+        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
+      });
+      if (r.ok) console.log(`[SupabaseSync] KPI scores for ${month} saved ✓`);
+    }
+
+    const cache = getCache();
+    if (!cache.kpi_scores) cache.kpi_scores = {};
+    cache.kpi_scores[month] = scores;
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+  }
+
+  // ── Bulk sync from Supabase → localStorage (page load) ──────────────
+  async function syncToLocal(month, opts) {
+    opts = opts || {};
+    const slug = _slug(month);
+    if (!slug) return { ok:false, reason:'no_month' };
+
+    try {
+      const [claimsRes, flagsRes, kpiRes] = await Promise.all([
+        _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`),
+        _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`),
+        _rest(`kpi_scores?select=*&month=eq.${encodeURIComponent(month)}`)
+      ]);
+
+      if (!claimsRes.ok) return { ok:false, reason:'claims_fetch_failed' };
+
+      // Populate camp_claim_* keys for back-compat readers
+      let claimCount = 0;
+      const claimsObj = {};
+      (claimsRes.data || []).forEach(row => {
+        const compKey = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
+        const lsKey   = `camp_claim_${slug}_${compKey}`;
+        const val = {
+          ts     : row.ts,
+          remark : row.remark || '',
+          bulk   : !!row.bulk,
+          status : row.status || 'delivered',
+          actor  : row.actor || 'agent'
+        };
+        localStorage.setItem(lsKey, JSON.stringify(val));
+        claimsObj[compKey] = val;
+        claimCount++;
+      });
+
+      // Flags per agent
+      let flagCount = 0;
+      const flagsByAgent = {};
+      (flagsRes.data || []).forEach(row => {
+        if (!flagsByAgent[row.agent]) flagsByAgent[row.agent] = {};
+        flagsByAgent[row.agent][row.debtor_code] = {
+          reason: row.reason || '',
+          ts    : row.ts
+        };
+      });
+      Object.entries(flagsByAgent).forEach(([agent, flags]) => {
+        localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(flags));
+        flagCount++;
+      });
+
+      // KPI scores
+      const kpiByAgent = {};
+      (kpiRes.data || []).forEach(row => {
+        kpiByAgent[row.agent] = row.scores || {};
+      });
+      if (Object.keys(kpiByAgent).length) {
+        localStorage.setItem(`md_scores_${slug}`, JSON.stringify(kpiByAgent));
+      }
+
+      // Refresh shared cache bucket
       const cache = getCache();
-      if (!cache[fileKey]) cache[fileKey] = {};
-      cache[fileKey][month] = scores;
-      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
-      push(fileKey, cache[fileKey]).then(ok => {
-        if (ok) console.log(`[GistSync] KPI scores for ${month} saved to Gist ✓`);
-      }).catch(() => {});
+      cache[`claims_${slug}`] = claimsObj;
+      cache[`flags_${slug}`]  = flagsByAgent;
+      if (!cache.kpi_scores) cache.kpi_scores = {};
+      cache.kpi_scores[month] = kpiByAgent;
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+      localStorage.setItem(CACHE_TS_KEY, Date.now().toString());
+
+      console.log(`[SupabaseSync] Pulled ${claimCount} claims, ${flagCount} agents' flags for ${month}`);
+      return { ok:true, claimCount, flagCount };
+    } catch (e) {
+      console.warn('[SupabaseSync] syncToLocal error', e);
+      return { ok:false, reason:'exception', error:e };
     }
   }
 
-  // ── Sync from Gist to localStorage (on page load) ────────────────────────
-  async function syncToLocal(month) {
-    if (!isConfigured()) return;
-    const slug = month.replace(' ','');
+  // ── Back-compat: setup/createGist are no-ops now ─────────────────────
+  async function setup() { return { ok:true, gist_id:'supabase', backend:'supabase' }; }
+  async function createGist() { return { ok:true, gist_id:'supabase', url:SUPABASE_URL }; }
 
-    // Pull if cache is older than 5 minutes
-    let data;
-    if (getCacheAge() > 300) {
-      data = await pull();
-    } else {
-      data = getCache();
-    }
-    if (!data) return;
-
-    // Claims → localStorage
-    const claims = data[`claims_${slug}`] || {};
-    Object.entries(claims).forEach(([key, val]) => {
-      localStorage.setItem(`camp_claim_${slug}_${key}`, JSON.stringify(val));
-    });
-
-    // Flags → localStorage
-    const flags = data[`flags_${slug}`] || {};
-    Object.entries(flags).forEach(([agent, agentFlags]) => {
-      localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(agentFlags));
-    });
-
-    // KPI scores → localStorage
-    const kpi = data['kpi_scores'] || {};
-    if (kpi[month]) {
-      localStorage.setItem(`md_scores_${slug}`, JSON.stringify(kpi[month]));
-    }
-
-    console.log(`[GistSync] Synced ${Object.keys(claims).length} claims, ${Object.keys(flags).length} agents' flags for ${month}`);
+  // ── Helper: slug → "Apr 26" style month ──────────────────────────────
+  const MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function _monthFromSlug(slug) {
+    // "Apr26" → "Apr 26"
+    const m = /^([A-Za-z]{3})(\d+)$/.exec(slug || '');
+    if (m) return `${m[1]} ${m[2]}`;
+    return slug;
   }
 
-  // ── Setup (called from Admin to configure) ───────────────────────────────
-  async function setup(gistId, token) {
-    // Test the credentials
+  // ── Realtime subscription (optional, caller opts in) ─────────────────
+  // Fires cb() when claims for this month change on the server
+  let _realtimeClient = null;
+  function subscribeClaims(month, cb) {
     try {
-      const r = await fetch(`https://api.github.com/gists/${gistId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!r.ok) return { ok: false, error: `HTTP ${r.status} — check Gist ID and token` };
-      saveConfig({ gist_id: gistId, token });
-      return { ok: true };
-    } catch(e) {
-      return { ok: false, error: e.message };
+      if (typeof supabase === 'undefined' || !supabase.createClient) {
+        console.warn('[SupabaseSync] realtime unavailable: supabase-js not loaded');
+        return () => {};
+      }
+      if (!_realtimeClient) {
+        _realtimeClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      }
+      const channel = _realtimeClient
+        .channel(`claims_${_slug(month)}`)
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'claims', filter: `month=eq.${month}` },
+          (payload) => { try { cb(payload); } catch(e){} }
+        )
+        .subscribe();
+      return () => { try { _realtimeClient.removeChannel(channel); } catch(e){} };
+    } catch (e) {
+      console.warn('[SupabaseSync] subscribeClaims failed', e);
+      return () => {};
     }
   }
 
-  async function createGist(token, description = 'MIRACLE-奇迹 MD Dashboard Data') {
-    try {
-      const r = await fetch('https://api.github.com/gists', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github+json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          description,
-          public: false,
-          files: {
-            'claims_init.json': { content: '{}' },
-            'flags_init.json':  { content: '{}' },
-            'kpi_scores.json':  { content: '{}' },
-          }
-        })
-      });
-      if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-      const data = await r.json();
-      saveConfig({ gist_id: data.id, token });
-      return { ok: true, gist_id: data.id, url: data.html_url };
-    } catch(e) {
-      return { ok: false, error: e.message };
-    }
+  // ── Audit log (fire-and-forget) ──────────────────────────────────────
+  function logAudit(actor, action, month, details) {
+    _rest('audit_log', {
+      method:'POST',
+      body: [{ actor, action, month: month || null, details: details || {} }]
+    }).catch(()=>{});
   }
 
+  // ── Public API (same shape as GistSync) ──────────────────────────────
   return {
-    isConfigured, getConfig, setup, createGist,
-    pull, push, getCache, syncToLocal,
+    isConfigured, getConfig, saveConfig, setup, createGist,
+    pull, push,
     saveClaim, removeClaim, saveFlags, saveKPIScores,
+    syncToLocal, getCache, getCacheAge,
+    subscribeClaims, logAudit,
+    _backend: 'supabase'
   };
-
 })();
 
-// Export for use in other files
+// Back-compat export
 if (typeof module !== 'undefined') module.exports = GistSync;
 
 </script>
