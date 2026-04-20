@@ -1584,18 +1584,42 @@ function renderCampaignsMgmt() {
 
   list.innerHTML = active.map(camp => {
     const claims   = getClaims(camp.id);
-    const poolSize = camp.debtors?.length || 0;
+
+    // Deduplicate by debtor code — old bulk mark wrote records for every agent
+    // We want unique debtors, not unique agent×debtor combinations
+    const debtorStatuses = {}; // debtorCode → best status
+    Object.entries(claims).forEach(([key, c]) => {
+      // key format: agent_campId_debtorCode
+      const parts = key.split('_');
+      const debtorCode = parts[parts.length - 1];
+      const s = c.status || ((c.ts || c.bulk) ? 'delivered' : 'pending');
+      // Priority: delivered > refused > next_visit > not_in > removed > pending
+      const priority = { delivered:5, refused:4, next_visit:3, not_in:2, removed:1, pending:0 };
+      if (!debtorStatuses[debtorCode] || (priority[s]||0) > (priority[debtorStatuses[debtorCode]]||0)) {
+        debtorStatuses[debtorCode] = s;
+      }
+    });
+
+    // Use camp.debtors length as pool if available
+    // For birthday campaigns: use DATA.birthday_campaign.debtors as the authoritative pool
+    const isBdayCamp     = camp.type === 'birthday_gift' || camp.id === 'birthday_gift_auto';
+    const bdayPool       = isBdayCamp ? (DATA?.birthday_campaign?.debtors || []) : [];
+    const poolFromDebtors = isBdayCamp
+      ? bdayPool.length
+      : (camp.debtors?.length || 0);
+    const uniqueDebCodes  = Object.keys(debtorStatuses);
+    // Pool = uploaded list > birthday DATA pool > fall back to unique claims
+    const poolSize        = poolFromDebtors || uniqueDebCodes.length;
 
     let delivered = 0, refused = 0, removed = 0, nextVisit = 0, notIn = 0;
-    Object.values(claims).forEach(c => {
-      const s = c.status || 'delivered';
+    Object.values(debtorStatuses).forEach(s => {
       if      (s === 'delivered')  delivered++;
       else if (s === 'refused')    refused++;
       else if (s === 'removed')    removed++;
       else if (s === 'next_visit') nextVisit++;
       else if (s === 'not_in')     notIn++;
     });
-    const activePool = poolSize - removed;
+    const activePool = Math.max(poolSize - removed, delivered); // never less than delivered
     const pending    = Math.max(activePool - delivered - refused - nextVisit - notIn, 0);
     const pct        = activePool > 0 ? Math.min(Math.round(delivered / activePool * 100), 100) : 0;
     const pctCol     = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--gold)' : 'var(--accent)';
@@ -1707,7 +1731,9 @@ function renderCampaignsMgmt() {
 
         <!-- Footer -->
         <div style="padding:9px 14px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
-          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${Object.keys(claims).length} claim records in Gist</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">
+            ${poolSize} pool ${isBdayCamp?'(from dashboard data)':poolFromDebtors?'(from debtor list)':'(from claims)'} · ${uniqueDebCodes.length} claimed · ${Object.keys(claims).length} raw records
+          </div>
           <a href="campaign_audit.html" target="_blank"
              style="font-family:var(--mono);font-size:9px;color:var(--purple);text-decoration:none;padding:4px 10px;border:1px solid rgba(107,63,160,.3);border-radius:6px;background:rgba(107,63,160,.05);">
             🔍 Open Audit →
