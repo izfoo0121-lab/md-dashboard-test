@@ -1602,11 +1602,14 @@ function renderCampaignsMgmt() {
     }).filter(Boolean).join('');
 
     const accentCol = TYPE_COLORS[camp.type] || 'var(--accent)';
+    const cardId    = `camp-card-${camp.id}`;
 
     return `
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:10px;overflow:hidden;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:10px;overflow:hidden;" id="${cardId}">
       <div style="height:3px;background:${accentCol};"></div>
-      <div style="padding:12px 14px;border-bottom:1px solid var(--border);">
+
+      <!-- ── Clickable header — always visible ── -->
+      <div onclick="toggleCampCard('${cardId}')" style="padding:12px 14px;cursor:pointer;user-select:none;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
           <div style="flex:1;">
             <div style="font-family:var(--mono);font-size:8px;color:${accentCol};text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px;">
@@ -1617,53 +1620,78 @@ function renderCampaignsMgmt() {
               ${activePool} active pool${removed>0?` · <span style="color:var(--purple);">${removed} removed</span>`:''} &nbsp;·&nbsp; ⏰ ${camp.deadline||'no deadline'}
             </div>
           </div>
-          <div style="text-align:right;flex-shrink:0;margin-left:10px;">
-            <div style="font-family:var(--display);font-size:26px;color:${pctCol};">${pct}%</div>
-            <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">${delivered}/${activePool} delivered</div>
+          <div style="display:flex;align-items:flex-start;gap:10px;flex-shrink:0;margin-left:10px;">
+            <div style="text-align:right;">
+              <div style="font-family:var(--display);font-size:26px;color:${pctCol};">${pct}%</div>
+              <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">${delivered}/${activePool} delivered</div>
+            </div>
+            <div id="${cardId}-arrow" style="font-family:var(--mono);font-size:14px;color:var(--ink3);margin-top:4px;">▸</div>
           </div>
         </div>
-        <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:8px;">
+        <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
           <div style="height:100%;width:${pct}%;background:${pctCol};border-radius:3px;transition:width .4s;"></div>
         </div>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:${focCost>0?'10px':'0'};">
-          ${delivered >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(42,122,75,.12);color:var(--green);padding:2px 8px;border-radius:10px;">✓ ${delivered} delivered</span>`:''}
-          ${pending   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.05);color:var(--ink3);padding:2px 8px;border-radius:10px;">⏳ ${pending} pending</span>`:''}
-          ${nextVisit >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 8px;border-radius:10px;">📅 ${nextVisit} next visit</span>`:''}
-          ${notIn     >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.05);color:var(--ink3);padding:2px 8px;border-radius:10px;">📵 ${notIn} not in</span>`:''}
-          ${refused   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 8px;border-radius:10px;">✗ ${refused} refused</span>`:''}
-          ${removed   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(107,63,160,.1);color:var(--purple);padding:2px 8px;border-radius:10px;">— ${removed} removed</span>`:''}
-        </div>
-        ${focCost>0?`
-        <div style="background:rgba(200,134,10,.06);border:1px solid rgba(200,134,10,${focWarn?'.4':'.15'});border-radius:8px;padding:9px 11px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:${focCap>0?'6px':'0'};">
-            <div>
-              <div style="font-family:var(--mono);font-size:8px;color:var(--gold);text-transform:uppercase;letter-spacing:.08em;">FOC Cost Running Total</div>
-              <div style="font-family:var(--display);font-size:20px;color:${focWarn?'var(--accent)':'var(--gold)'};">RM ${focActual.toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-              <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);margin-top:1px;">${delivered} × RM ${focCost.toFixed(2)}</div>
-            </div>
-            ${focCap>0?`<div style="text-align:right;">
-              <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">Cap: RM ${focCap.toLocaleString('en-MY',{minimumFractionDigits:0})}</div>
-              <div style="font-family:var(--display);font-size:16px;color:${focWarn?'var(--accent)':'var(--ink3)'};">${focPct}%</div>
-            </div>`:''}
+      </div>
+
+      <!-- ── Collapsible body — hidden by default ── -->
+      <div id="${cardId}-body" style="display:none;border-top:1px solid var(--border);">
+
+        <!-- Status chips + FOC banner -->
+        <div style="padding:10px 14px ${focCost>0?'0':'10px'};">
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:${focCost>0?'10px':'0'};">
+            ${delivered >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(42,122,75,.12);color:var(--green);padding:2px 8px;border-radius:10px;">✓ ${delivered} delivered</span>`:''}
+            ${pending   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.05);color:var(--ink3);padding:2px 8px;border-radius:10px;">⏳ ${pending} pending</span>`:''}
+            ${nextVisit >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 8px;border-radius:10px;">📅 ${nextVisit} next visit</span>`:''}
+            ${notIn     >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.05);color:var(--ink3);padding:2px 8px;border-radius:10px;">📵 ${notIn} not in</span>`:''}
+            ${refused   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 8px;border-radius:10px;">✗ ${refused} refused</span>`:''}
+            ${removed   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(107,63,160,.1);color:var(--purple);padding:2px 8px;border-radius:10px;">— ${removed} removed</span>`:''}
           </div>
-          ${focCap>0?`<div style="height:4px;background:rgba(200,134,10,.15);border-radius:2px;overflow:hidden;">
-            <div style="height:100%;width:${focPct}%;background:${focWarn?'var(--accent)':'var(--gold)'};border-radius:2px;"></div>
+          ${focCost>0?`
+          <div style="background:rgba(200,134,10,.06);border:1px solid rgba(200,134,10,${focWarn?'.4':'.15'});border-radius:8px;padding:9px 11px;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:${focCap>0?'6px':'0'};">
+              <div>
+                <div style="font-family:var(--mono);font-size:8px;color:var(--gold);text-transform:uppercase;letter-spacing:.08em;">FOC Cost Running Total</div>
+                <div style="font-family:var(--display);font-size:20px;color:${focWarn?'var(--accent)':'var(--gold)'};">RM ${focActual.toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);margin-top:1px;">${delivered} × RM ${focCost.toFixed(2)}</div>
+              </div>
+              ${focCap>0?`<div style="text-align:right;">
+                <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">Cap: RM ${focCap.toLocaleString('en-MY',{minimumFractionDigits:0})}</div>
+                <div style="font-family:var(--display);font-size:16px;color:${focWarn?'var(--accent)':'var(--ink3)'};">${focPct}%</div>
+              </div>`:''}
+            </div>
+            ${focCap>0?`<div style="height:4px;background:rgba(200,134,10,.15);border-radius:2px;overflow:hidden;">
+              <div style="height:100%;width:${focPct}%;background:${focWarn?'var(--accent)':'var(--gold)'};border-radius:2px;"></div>
+            </div>`:''}
           </div>`:''}
-        </div>`:''}
-      </div>
-      <div>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;padding:7px 14px 4px;border-bottom:1px solid var(--border);">Per-agent delivery</div>
-        ${agentRows||`<div style="padding:12px 14px;font-family:var(--mono);font-size:10px;color:var(--ink3);">No agent assignments found — add an Agent column to your debtor upload list.</div>`}
-      </div>
-      <div style="padding:9px 14px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${Object.keys(claims).length} claim records in Gist</div>
-        <a href="campaign_audit.html" target="_blank"
-           style="font-family:var(--mono);font-size:9px;color:var(--purple);text-decoration:none;padding:4px 10px;border:1px solid rgba(107,63,160,.3);border-radius:6px;background:rgba(107,63,160,.05);">
-          🔍 Open Audit →
-        </a>
+        </div>
+
+        <!-- Per-agent rows -->
+        <div style="border-top:1px solid var(--border);">
+          <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;padding:7px 14px 4px;border-bottom:1px solid var(--border);">Per-agent delivery</div>
+          ${agentRows||`<div style="padding:12px 14px;font-family:var(--mono);font-size:10px;color:var(--ink3);">No agent assignments found — add an Agent column to your debtor upload list.</div>`}
+        </div>
+
+        <!-- Footer -->
+        <div style="padding:9px 14px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${Object.keys(claims).length} claim records in Gist</div>
+          <a href="campaign_audit.html" target="_blank"
+             style="font-family:var(--mono);font-size:9px;color:var(--purple);text-decoration:none;padding:4px 10px;border:1px solid rgba(107,63,160,.3);border-radius:6px;background:rgba(107,63,160,.05);">
+            🔍 Open Audit →
+          </a>
+        </div>
+
       </div>
     </div>`;
   }).join('');
+}
+
+function toggleCampCard(cardId) {
+  const body  = document.getElementById(cardId + '-body');
+  const arrow = document.getElementById(cardId + '-arrow');
+  if (!body) return;
+  const open = body.style.display === 'none';
+  body.style.display  = open ? 'block' : 'none';
+  if (arrow) arrow.textContent = open ? '▾' : '▸';
 }
 
 function renderPendingActions() {
