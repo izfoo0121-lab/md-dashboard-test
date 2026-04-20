@@ -364,6 +364,29 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
       <div id="newbie-cards"></div>
     </div>
 
+    <!-- 5c. Brand Volume Alert -->
+    <div id="brand-volume-alert-section" style="display:none;">
+      <div class="sec-lbl">⚠️ Brand Volume — Behind Pace</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin:0 0 8px 2px;">Agents where brand CTN this month is lower than last month. Tap row to drill down.</div>
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div id="brand-volume-alert-list"></div>
+      </div>
+    </div>
+
+    <!-- 5d. Dropping Debtors -->
+    <div id="dropping-debtors-section" style="display:none;">
+      <div class="sec-lbl">📉 Dropping Debtors — Volume Down vs Last Month</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin:0 0 8px 2px;">Debtors who bought last month but reduced volume this month. Sorted worst drop first.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;" id="drop-filter-row">
+        <button onclick="setDropFilter('all',this)" class="lb-btn active" style="background:var(--ink);color:#fff;border-radius:6px;padding:4px 10px;">All</button>
+        <button onclick="setDropFilter('stopped',this)" class="lb-btn" style="border-radius:6px;padding:4px 10px;">Stopped buying</button>
+        <button onclick="setDropFilter('reduced',this)" class="lb-btn" style="border-radius:6px;padding:4px 10px;">Reduced ≥30%</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div id="dropping-debtors-list"></div>
+      </div>
+    </div>
+
     <!-- Monthly Summary Table -->
     <div class="sec-lbl">📊 Monthly Summary — All Agents</div>
     <div class="card">
@@ -907,6 +930,8 @@ function renderOverview() {
   renderCommHeatmap();
   renderDebtorSummary();
   renderBrandSkuStatus();
+  renderBrandVolumeAlert();
+  renderDroppingDebtors();
   renderNewbieProgress();
   renderAgingOverview();
   renderMonthlySummary();
@@ -1891,6 +1916,149 @@ function renderDebtorSummary(){
   });
   html+=`</div>`;
   document.getElementById('debtor-summary').innerHTML=html;}
+
+// ── Brand Volume Alert ─────────────────────────────────────────────────────
+function renderBrandVolumeAlert() {
+  const section = document.getElementById('brand-volume-alert-section');
+  const list    = document.getElementById('brand-volume-alert-list');
+  if (!section || !list) return;
+  const D      = CURRENT_DATA || DATA;
+  const agents = Object.keys(D.agents || {}).sort();
+  const BRANDS = ['iFACE','SUKUN','BISON','TR20','EVO','LAM+LWM'];
+
+  // Build alert rows: agent × brand where cur_ctn < last month equiv
+  // We use brand_commission[brand].cur_ctn vs group_brand_targets for pace
+  // Since we don't have prev month brand CTN in management data directly,
+  // we compare cur_ctn against the monthly target as a pace indicator
+  const alerts = [];
+
+  agents.forEach(agent => {
+    const bc = D.agents[agent]?.brand_commission || {};
+    const sp = D.agents[agent]?.sales_progression || {};
+    const wd = D.working_days || {};
+    const elapsed = wd.elapsed_working_days || 1;
+    const total   = wd.total_working_days   || 22;
+    const pace    = elapsed / total; // e.g. 0.45 = 45% through month
+
+    BRANDS.forEach(brand => {
+      const bdata  = bc[brand] || {};
+      const curCtn = bdata.cur_ctn || 0;
+      // Get target from group_brand_targets if available
+      const gbt    = D.group_brand_targets?.[brand] || {};
+      const target = gbt.target || 0;
+      if (!target) return; // no target set, skip
+
+      const expectedByNow = target * pace;
+      if (curCtn < expectedByNow * 0.7) { // behind by more than 30% of expected pace
+        const behindPct = target > 0 ? Math.round((1 - curCtn / expectedByNow) * 100) : 0;
+        const gap       = Math.round(expectedByNow - curCtn);
+        alerts.push({ agent, brand, curCtn, target, expectedByNow: Math.round(expectedByNow), gap, behindPct, pace });
+      }
+    });
+  });
+
+  if (!alerts.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+
+  // Sort: worst behind first
+  alerts.sort((a, b) => b.behindPct - a.behindPct);
+
+  const BRAND_COLS = { iFACE:'#1a5c8f', SUKUN:'#6b3fa0', BISON:'#c8860a', TR20:'#2a7a4b', EVO:'#c8381a', 'LAM+LWM':'#5a5550' };
+
+  list.innerHTML = alerts.map((a, i) => {
+    const col    = a.behindPct >= 50 ? 'var(--accent)' : 'var(--gold)';
+    const bg     = i % 2 === 0 ? 'transparent' : 'rgba(0,0,0,.02)';
+    const brandCol = BRAND_COLS[a.brand] || 'var(--ink3)';
+    return `
+    <div style="display:grid;grid-template-columns:60px 70px 1fr 60px 60px;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);background:${bg};cursor:pointer;" onclick="openDrill('${a.agent}')">
+      <div style="font-family:var(--display);font-size:15px;letter-spacing:.04em;">${a.agent}</div>
+      <div style="font-family:var(--mono);font-size:9px;font-weight:600;color:${brandCol};background:rgba(0,0,0,.05);padding:2px 7px;border-radius:8px;text-align:center;">${a.brand}</div>
+      <div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${a.curCtn} CTN so far · should be ~${a.expectedByNow} · gap ${a.gap}</div>
+        <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:3px;">
+          <div style="height:100%;width:${Math.min(a.curCtn/a.expectedByNow*100,100)}%;background:${col};border-radius:2px;"></div>
+        </div>
+      </div>
+      <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:${col};text-align:right;">-${a.behindPct}%</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);text-align:right;">${Math.round(a.pace*100)}% mth</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Dropping Debtors ───────────────────────────────────────────────────────
+let _dropFilter = 'all';
+
+function setDropFilter(f, btn) {
+  _dropFilter = f;
+  document.querySelectorAll('#drop-filter-row .lb-btn').forEach(b => {
+    b.style.background = 'transparent'; b.style.color = 'var(--ink)';
+  });
+  if (btn) { btn.style.background = 'var(--ink)'; btn.style.color = '#fff'; }
+  renderDroppingDebtors();
+}
+
+function renderDroppingDebtors() {
+  const section = document.getElementById('dropping-debtors-section');
+  const list    = document.getElementById('dropping-debtors-list');
+  if (!section || !list) return;
+  const D      = CURRENT_DATA || DATA;
+  const agents = Object.keys(D.agents || {}).sort();
+
+  // Collect all debtors with a volume drop
+  const drops = [];
+  agents.forEach(agent => {
+    const debtors = D.agents[agent]?.debtor_cards?.debtors || [];
+    debtors.forEach(d => {
+      if (!d.volume_drop_pct) return;
+      const stopped = (d.ctn_cur || 0) === 0 && (d.ctn_prev1 || 0) > 0;
+      const reduced = !stopped && d.volume_drop_pct >= 30;
+      if (!stopped && !reduced) return;
+      if (_dropFilter === 'stopped' && !stopped) return;
+      if (_dropFilter === 'reduced' && !reduced) return;
+      drops.push({ agent, ...d, stopped, reduced });
+    });
+  });
+
+  if (!drops.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+
+  // Sort: stopped first, then by drop % descending
+  drops.sort((a, b) => {
+    if (a.stopped !== b.stopped) return a.stopped ? -1 : 1;
+    return (b.volume_drop_pct || 0) - (a.volume_drop_pct || 0);
+  });
+
+  // Cap at 50 rows for performance
+  const shown = drops.slice(0, 50);
+
+  list.innerHTML = shown.map((d, i) => {
+    const bg      = i % 2 === 0 ? 'transparent' : 'rgba(0,0,0,.02)';
+    const dropCol = d.stopped ? 'var(--accent)' : 'var(--gold)';
+    const tag     = d.stopped
+      ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 7px;border-radius:8px;">Stopped</span>`
+      : `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 7px;border-radius:8px;">-${d.volume_drop_pct}%</span>`;
+    const prevCtn = d.ctn_prev1 || 0;
+    const curCtn  = d.ctn_cur  || 0;
+
+    return `
+    <div style="display:grid;grid-template-columns:60px 1fr 80px 72px;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);background:${bg};">
+      <div style="font-family:var(--display);font-size:13px;letter-spacing:.04em;color:var(--ink2);">${d.agent}</div>
+      <div>
+        <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${d.company_name||d.debtor_code}</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${d.debtor_code} · ${d.debtor_type||''}</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">Prev → Now</div>
+        <div style="font-family:var(--mono);font-size:11px;font-weight:500;">
+          <span style="color:var(--ink2);">${prevCtn}</span>
+          <span style="color:var(--ink3);"> → </span>
+          <span style="color:${dropCol};">${curCtn}</span>
+        </div>
+      </div>
+      <div style="text-align:right;">${tag}</div>
+    </div>`;
+  }).join('') + (drops.length > 50 ? `<div style="padding:10px 14px;font-family:var(--mono);font-size:9px;color:var(--ink3);text-align:center;">Showing top 50 of ${drops.length} — use agent drill-down for full list</div>` : '');
+}
 
 // ── Newbie Progress ──
 function renderNewbieProgress(){
