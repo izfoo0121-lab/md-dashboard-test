@@ -1160,10 +1160,8 @@ async function initAdmin() {
   renderAdminBrandSKU();
   updateRawJSON();
 
-  // Load campaigns
+  // Load campaigns — populateBulkCampSelect called inside loadCampaignsData after async load
   loadCampaignsData();
-  renderCampaignsList();
-  populateBulkCampSelect();
   renderKPIWeights();
   initKPIActualsTab();
   // Set default deadline to end of current month
@@ -2636,7 +2634,6 @@ async function loadCampaignsData() {
     const r = await fetch('campaigns.json?v=' + Date.now());
     if (r.ok) {
       const fromFile = await r.json();
-      // Merge: file wins, but keep any localStorage-only campaigns not in file
       const fileIds = new Set((fromFile.campaigns||[]).map(c=>c.id));
       const lsRaw   = localStorage.getItem('touro_campaigns');
       const lsData  = lsRaw ? JSON.parse(lsRaw) : { campaigns: [] };
@@ -2644,15 +2641,20 @@ async function loadCampaignsData() {
       CAMPAIGNS_DATA = { ...fromFile, campaigns: [...(fromFile.campaigns||[]), ...lsOnly] };
       localStorage.setItem('touro_campaigns', JSON.stringify(CAMPAIGNS_DATA));
       renderCampaignsList();
+      populateBulkCampSelect();
       return;
     }
   } catch(e) { /* fallback */ }
   try { CAMPAIGNS_DATA = JSON.parse(localStorage.getItem('touro_campaigns')||'{"campaigns":[]}'); }
   catch(e) { CAMPAIGNS_DATA = { campaigns: [] }; }
+  // Fallback path — data loaded from localStorage synchronously
+  renderCampaignsList();
+  populateBulkCampSelect();
 }
 function saveCampaignsData() {
   localStorage.setItem('touro_campaigns', JSON.stringify(CAMPAIGNS_DATA));
   renderCampaignsList();
+  populateBulkCampSelect();
 }
 
 function renderCatRules(cats) {
