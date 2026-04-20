@@ -376,7 +376,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
     <!-- 5d. Dropping Debtors -->
     <div id="dropping-debtors-section" style="display:none;">
       <div class="sec-lbl">📉 Dropping Debtors — Volume Down vs Last Month</div>
-      <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin:0 0 8px 2px;">Debtors who bought last month but reduced volume this month. Sorted worst drop first.</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin:0 0 8px 2px;">Debtors who bought last month but reduced volume this month. Sorted by prev month CTN highest first. P-Personal excluded.</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;" id="drop-filter-row">
         <button onclick="setDropFilter('all',this)" class="lb-btn active" style="background:var(--ink);color:#fff;border-radius:6px;padding:4px 10px;">All</button>
         <button onclick="setDropFilter('stopped',this)" class="lb-btn" style="border-radius:6px;padding:4px 10px;">Stopped buying</button>
@@ -2036,6 +2036,9 @@ function renderDroppingDebtors() {
   agents.forEach(agent => {
     const debtors = D.agents[agent]?.debtor_cards?.debtors || [];
     debtors.forEach(d => {
+      // Exclude P-Personal accounts — not real shop debtors
+      if ((d.debtor_type || '').toUpperCase() === 'P-PERSONAL') return;
+
       // Include if: stopped buying (ctn_cur=0, ctn_prev1>0) OR volume dropped ≥30%
       const stopped = (d.ctn_cur || 0) === 0 && (d.ctn_prev1 || 0) > 0;
       const reduced = !stopped && (d.volume_drop_pct || 0) >= 30;
@@ -2051,8 +2054,6 @@ function renderDroppingDebtors() {
       // Apply SKU brand filter — only show if selected brand is lapsed for this debtor
       if (_dropSkuFilter !== 'all' && !lapsedSkus.includes(_dropSkuFilter)) return;
 
-      // Find SKUs that were regular/bought before but now completely absent
-      // (stopped debtors: all previously-bought SKUs are lapsed)
       drops.push({ agent, ...d, stopped, reduced, lapsedSkus });
     });
   });
@@ -2060,11 +2061,8 @@ function renderDroppingDebtors() {
   if (!drops.length) { section.style.display = 'none'; return; }
   section.style.display = 'block';
 
-  // Sort: stopped first, then by drop % descending
-  drops.sort((a, b) => {
-    if (a.stopped !== b.stopped) return a.stopped ? -1 : 1;
-    return (b.volume_drop_pct || 0) - (a.volume_drop_pct || 0);
-  });
+  // Sort: by prev month CTN highest first (biggest accounts that dropped matter most)
+  drops.sort((a, b) => (b.ctn_prev1 || 0) - (a.ctn_prev1 || 0));
 
   // Cap at 50 rows for performance
   const shown = drops.slice(0, 50);
