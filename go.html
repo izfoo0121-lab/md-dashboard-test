@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MIRACLE 奇迹 — Loading...</title>
+<style>
+body{margin:0;background:#0f0f13;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'DM Mono',monospace;}
+.box{text-align:center;color:#f0f0f5;}
+.logo{font-family:'Bebas Neue',sans-serif;font-size:48px;letter-spacing:.05em;color:#f0c040;margin-bottom:8px;}
+.sub{font-size:11px;color:#7070a0;text-transform:uppercase;letter-spacing:.1em;margin-bottom:32px;}
+.status{font-size:12px;color:#7070a0;margin-top:16px;}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#f0c040;margin:0 3px;animation:pulse 1.2s ease-in-out infinite;}
+.dot:nth-child(2){animation-delay:.2s;}
+.dot:nth-child(3){animation-delay:.4s;}
+@keyframes pulse{0%,100%{opacity:.2}50%{opacity:1}}
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&display=swap');
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="logo">MIRACLE 奇迹</div>
+  <div class="sub">MD Sales Dashboard</div>
+  <div><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+  <div class="status" id="status">Connecting...</div>
+</div>
+<script>
+(async function() {
+  const STATUS = document.getElementById('status');
+
+  // Step 1: Configure GistSync
+  const GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
+  const TOKEN   = 'ghp_jMOxnzskXiQhnVnzMkzlUinMabEjpZ46eNBz';
+  const CFG_KEY = 'md_gist_config';
+
+  try {
+    localStorage.setItem(CFG_KEY, JSON.stringify({ gist_id: GIST_ID, token: TOKEN }));
+    STATUS.textContent = 'Syncing data...';
+  } catch(e) {
+    STATUS.textContent = 'Storage error — redirecting anyway';
+  }
+
+  // Step 2: Pull claims from Gist so they're in localStorage before dashboard loads
+  try {
+    const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+      headers: { Authorization: `Bearer ${TOKEN}`, Accept: 'application/vnd.github+json' }
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const result = {};
+      Object.entries(data.files || {}).forEach(([fname, f]) => {
+        try { result[fname.replace('.json','')] = JSON.parse(f.content || '{}'); }
+        catch {}
+      });
+      // Write claims to localStorage
+      const claimsKey = Object.keys(result).find(k => k.startsWith('claims_'));
+      if (claimsKey) {
+        const claims = result[claimsKey] || {};
+        const slug = claimsKey.replace('claims_','');
+        Object.entries(claims).forEach(([key, val]) => {
+          try { localStorage.setItem(`camp_claim_${slug}_${key}`, JSON.stringify(val)); } catch {}
+        });
+        STATUS.textContent = `Synced ${Object.keys(claims).length} records — launching...`;
+      }
+      // Cache full Gist data
+      localStorage.setItem('md_gist_cache', JSON.stringify(result));
+      localStorage.setItem('md_gist_cache_ts', Date.now().toString());
+    }
+  } catch(e) {
+    STATUS.textContent = 'Offline — launching with cached data';
+  }
+
+  // Step 3: Redirect to dashboard
+  await new Promise(r => setTimeout(r, 800));
+  window.location.href = 'sales_dashboard.html';
+})();
+</script>
+</body>
+</html>
