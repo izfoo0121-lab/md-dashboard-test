@@ -2009,13 +2009,21 @@ function renderDroppingDebtors() {
   agents.forEach(agent => {
     const debtors = D.agents[agent]?.debtor_cards?.debtors || [];
     debtors.forEach(d => {
-      if (!d.volume_drop_pct) return;
+      // Include if: stopped buying (ctn_cur=0, ctn_prev1>0) OR volume dropped ≥30%
       const stopped = (d.ctn_cur || 0) === 0 && (d.ctn_prev1 || 0) > 0;
-      const reduced = !stopped && d.volume_drop_pct >= 30;
+      const reduced = !stopped && (d.volume_drop_pct || 0) >= 30;
       if (!stopped && !reduced) return;
       if (_dropFilter === 'stopped' && !stopped) return;
       if (_dropFilter === 'reduced' && !reduced) return;
-      drops.push({ agent, ...d, stopped, reduced });
+
+      // Find lapsed SKUs — bought in prev months but not this month
+      const lapsedSkus = Object.entries(d.sku_status || {})
+        .filter(([, v]) => v === 'lapsed')
+        .map(([k]) => k);
+
+      // Find SKUs that were regular/bought before but now completely absent
+      // (stopped debtors: all previously-bought SKUs are lapsed)
+      drops.push({ agent, ...d, stopped, reduced, lapsedSkus });
     });
   });
 
@@ -2031,31 +2039,52 @@ function renderDroppingDebtors() {
   // Cap at 50 rows for performance
   const shown = drops.slice(0, 50);
 
+  const SKU_COLS = {
+    IFACE:'#1a5c8f', SUKUN:'#6b3fa0', EVO:'#c8381a',
+    BISON:'#c8860a', TR20:'#2a7a4b', 'LAM+LWM':'#5a5550'
+  };
+
   list.innerHTML = shown.map((d, i) => {
     const bg      = i % 2 === 0 ? 'transparent' : 'rgba(0,0,0,.02)';
     const dropCol = d.stopped ? 'var(--accent)' : 'var(--gold)';
-    const tag     = d.stopped
-      ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 7px;border-radius:8px;">Stopped</span>`
-      : `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 7px;border-radius:8px;">-${d.volume_drop_pct}%</span>`;
     const prevCtn = d.ctn_prev1 || 0;
     const curCtn  = d.ctn_cur  || 0;
 
+    const statusTag = d.stopped
+      ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 7px;border-radius:8px;white-space:nowrap;">Stopped</span>`
+      : `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 7px;border-radius:8px;white-space:nowrap;">-${d.volume_drop_pct}%</span>`;
+
+    // SKU lapsed pills
+    const skuPills = d.lapsedSkus.length
+      ? d.lapsedSkus.map(sku => {
+          const col = SKU_COLS[sku] || 'var(--ink3)';
+          return `<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.06);color:${col};border:1px solid ${col}33;padding:1px 6px;border-radius:6px;white-space:nowrap;">${sku}</span>`;
+        }).join('')
+      : `<span style="font-family:var(--mono);font-size:8px;color:var(--ink3);">—</span>`;
+
     return `
-    <div style="display:grid;grid-template-columns:60px 1fr 80px 72px;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);background:${bg};">
-      <div style="font-family:var(--display);font-size:13px;letter-spacing:.04em;color:var(--ink2);">${d.agent}</div>
-      <div>
-        <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${d.company_name||d.debtor_code}</div>
-        <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${d.debtor_code} · ${d.debtor_type||''}</div>
-      </div>
-      <div style="text-align:center;">
-        <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">Prev → Now</div>
-        <div style="font-family:var(--mono);font-size:11px;font-weight:500;">
-          <span style="color:var(--ink2);">${prevCtn}</span>
-          <span style="color:var(--ink3);"> → </span>
-          <span style="color:${dropCol};">${curCtn}</span>
+    <div style="padding:9px 14px;border-bottom:1px solid var(--border);background:${bg};">
+      <div style="display:grid;grid-template-columns:56px 1fr 70px 64px;gap:8px;align-items:center;margin-bottom:5px;">
+        <div style="font-family:var(--display);font-size:13px;letter-spacing:.04em;color:var(--ink2);">${d.agent}</div>
+        <div>
+          <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${d.company_name||d.debtor_code}</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${d.debtor_code} · ${d.debtor_type||''}</div>
         </div>
+        <div style="text-align:center;">
+          <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">Prev → Now</div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:500;">
+            <span style="color:var(--ink2);">${prevCtn}</span>
+            <span style="color:var(--ink3);"> → </span>
+            <span style="color:${dropCol};">${curCtn}</span>
+          </div>
+        </div>
+        <div style="text-align:right;">${statusTag}</div>
       </div>
-      <div style="text-align:right;">${tag}</div>
+      <!-- SKU lapsed row -->
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:64px;">
+        <span style="font-family:var(--mono);font-size:8px;color:var(--ink3);white-space:nowrap;">Lapsed SKU:</span>
+        ${skuPills}
+      </div>
     </div>`;
   }).join('') + (drops.length > 50 ? `<div style="padding:10px 14px;font-family:var(--mono);font-size:9px;color:var(--ink3);text-align:center;">Showing top 50 of ${drops.length} — use agent drill-down for full list</div>` : '');
 }
