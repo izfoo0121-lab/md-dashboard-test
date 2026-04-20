@@ -3369,7 +3369,7 @@ const GistSync = (() => {
   // ── Hardcoded fallback — set by admin, works for ALL devices automatically ──
   // Token scope: gist only (cannot touch code repo — safe to embed)
   const HARDCODED_GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
-  const HARDCODED_TOKEN   = 'ghp_jMOxnzskXiQhnVnzMkzlUinMabEjpZ46eNBz';
+  const HARDCODED_TOKEN   = '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';
 
   function getConfig() {
     // Priority: localStorage (admin override) → hardcoded defaults
@@ -3390,7 +3390,7 @@ const GistSync = (() => {
 
   function isConfigured() {
     const c = getConfig();
-    return !!(c.gist_id && c.token && c.token !== '%%GITHUB_TOKEN%%');
+    return !!(c.gist_id && c.token && c.token !== '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');
   }
 
   // ── Read all data from Gist ─────────────────────────────────────────────

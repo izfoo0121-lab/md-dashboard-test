@@ -1080,7 +1080,7 @@ function showDeployInstructions() {
 
       <div style="font-family:monospace;font-size:9px;color:#6a687a;text-transform:uppercase;margin-bottom:5px;">Step 2 — Find this line in the file (search with Ctrl+F)</div>
       <div style="background:#0e0e12;border:1px solid rgba(255,95,95,.3);border-radius:8px;padding:10px;margin-bottom:14px;">
-        <div style="font-family:monospace;font-size:11px;color:#ff5f5f;">const HARDCODED_TOKEN   = '%%GITHUB_TOKEN%%';</div>
+        <div style="font-family:monospace;font-size:11px;color:#ff5f5f;">const HARDCODED_TOKEN   = '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';</div>
       </div>
 
       <div style="font-family:monospace;font-size:9px;color:#6a687a;text-transform:uppercase;margin-bottom:5px;">Step 3 — Replace it with (copy exactly)</div>
@@ -3038,7 +3038,7 @@ const GistSync = (() => {
   // ── Hardcoded fallback — set by admin, works for ALL devices automatically ──
   // Token scope: gist only (cannot touch code repo — safe to embed)
   const HARDCODED_GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
-  const HARDCODED_TOKEN   = '%%GITHUB_TOKEN%%';  // Admin replaces this via admin.html
+  const HARDCODED_TOKEN   = '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';  // Admin replaces this via admin.html
 
   function getConfig() {
     // Priority: localStorage (admin override) → hardcoded defaults
@@ -3059,7 +3059,7 @@ const GistSync = (() => {
 
   function isConfigured() {
     const c = getConfig();
-    return !!(c.gist_id && c.token && c.token !== '%%GITHUB_TOKEN%%');
+    return !!(c.gist_id && c.token && c.token !== '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');
   }
 
   // ── Read all data from Gist ─────────────────────────────────────────────
