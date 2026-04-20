@@ -2613,8 +2613,34 @@ const CAMP_STATUS_KEY = () => {
 };
 
 function getCampStatuses() {
-  try { return JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); }
-  catch(e) { return {}; }
+  // Primary: agent's own marks (camp_status key)
+  let statuses = {};
+  try { statuses = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); }
+  catch(e) { statuses = {}; }
+
+  // Secondary: GistSync/bulk-imported claims (camp_claim keys) — read-only fallback
+  // Key format: camp_claim_Apr26_AGENT_campId_debtorCode
+  const month = (DATA?.current_month || '').replace(' ','');
+  const agent = currentAgent || '';
+  const prefix = `camp_claim_${month}_${agent}_`;
+  Object.keys(localStorage).forEach(k => {
+    if (!k.startsWith(prefix)) return;
+    const rest  = k.replace(prefix, '');          // campId_debtorCode
+    const lastU = rest.lastIndexOf('_');
+    if (lastU < 0) return;
+    const campId    = rest.substring(0, lastU);
+    const debtorCode= rest.substring(lastU + 1);
+    const key = `${campId}_${debtorCode}`;
+    if (statuses[key]) return;                     // agent's own mark takes priority
+    try {
+      const raw = JSON.parse(localStorage.getItem(k) || 'null');
+      if (!raw) return;
+      const s = raw.status || (raw.ts || raw.bulk ? 'delivered' : null);
+      if (s) statuses[key] = { status: s, ts: raw.ts || '', remark: raw.remark || '', agent };
+    } catch {}
+  });
+
+  return statuses;
 }
 
 function getCampStatus(campId, debtorCode) {
