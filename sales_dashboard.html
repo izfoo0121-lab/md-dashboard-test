@@ -3185,7 +3185,24 @@ function renderCamps() {
             ${g.items.map(d => {
               const phone = (d.phone||'').replace(/\s/g,'');
               const vs    = d.visit_status;
-              const claimData  = getCampClaims(currentAgent, c.id, d.debtor_code);
+              // For birthday camps, check multiple possible camp_ids since
+              // admin might have bulk-imported under camp_bday_apr26 while
+              // auto-generated list uses birthday_gift_auto.
+              // Any match (delivered or verified) counts as "sent".
+              let claimData = getCampClaims(currentAgent, c.id, d.debtor_code);
+              if (!claimData && c.type === 'birthday_gift') {
+                // Try alternate birthday camp IDs
+                const monthSlug = (DATA?.current_month||'').replace(' ','');
+                const prefix = `camp_claim_${monthSlug}_${currentAgent}_`;
+                const candidates = Object.keys(localStorage).filter(k =>
+                  k.startsWith(prefix)
+                  && k.endsWith(`_${d.debtor_code}`)
+                  && /_(birthday|bday)[^_]*_/i.test(k)
+                );
+                if (candidates.length) {
+                  try { claimData = JSON.parse(localStorage.getItem(candidates[0]) || 'null'); } catch {}
+                }
+              }
               const isClaimed  = !!claimData;
               const isFOCt     = c.type==='foc_sample'||c.type==='free_sample'||c.type==='festive_gift'||c.type==='birthday_gift';
               const isBday     = c.type==='birthday_gift';
