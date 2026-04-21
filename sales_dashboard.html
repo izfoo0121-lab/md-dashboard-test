@@ -561,7 +561,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
   <div class="summary-strip" id="summary-strip">
     <div class="summary-box">
       <div class="val" id="sum-total">—</div>
-      <div class="lbl">总户口</div>
+      <div class="lbl">总户口 <span style="font-size:7px;color:var(--muted);">(排除 Personal)</span></div>
     </div>
     <div class="summary-box">
       <div class="val" style="color:var(--green)" id="sum-active">—</div>
@@ -573,14 +573,14 @@ window.addEventListener('DOMContentLoaded', ()=>{
     </div>
     <div class="summary-box">
       <div class="val" style="color:var(--blue)" id="sum-rate">—</div>
-      <div class="lbl">光顾率*</div>
+      <div class="lbl">光顾率</div>
     </div>
     <div class="summary-box" style="cursor:pointer;" onclick="setSpecialFilter('flagged', document.querySelector('[data-val=\\'flagged\\']'))">
       <div class="val" style="color:var(--red)" id="sum-flags">0</div>
       <div class="lbl">⚑ Flagged</div>
     </div>
   </div>
-  <div style="font-family:var(--mono);font-size:8px;color:var(--muted);padding:2px 2px 6px;"> * 持续光顾率 excludes P-Personal</div>
+  <div style="font-family:var(--mono);font-size:8px;color:var(--muted);padding:2px 2px 6px;">* 所有数目排除 P-Personal · All counts exclude P-Personal (still shown in list below)</div>
   <div style="position:relative;">
     <input class="search-bar" id="debtor-search"
       placeholder="Search debtor name or code across all agents..."
@@ -2460,7 +2460,14 @@ function getFlag(agent, debtorCode) {
 }
 function getAgentFlagCount(agent) {
   const flags = loadFlags();
-  return Object.keys(flags[agent] || {}).length;
+  const agentFlags = flags[agent] || {};
+  // Exclude Personal-type debtors from flag count (matches summary-card rule)
+  const PERSONAL = ['P-Personal','P-PERSONAL','personal','Personal','PERSONAL'];
+  const debtors = DATA?.agents?.[agent]?.debtor_cards?.debtors || [];
+  const personalCodes = new Set(
+    debtors.filter(d => PERSONAL.includes(d.debtor_type||'')).map(d => d.debtor_code)
+  );
+  return Object.keys(agentFlags).filter(code => !personalCodes.has(code)).length;
 }
 function getAllFlags() {
   return loadFlags();
