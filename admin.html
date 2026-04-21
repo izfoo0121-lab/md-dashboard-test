@@ -1234,8 +1234,8 @@ async function initAdmin() {
   renderAdminBrandSKU();
   updateRawJSON();
 
-  // Load campaigns
-  loadCampaignsData();
+  // Load campaigns (async — await so dropdown populates correctly)
+  await loadCampaignsData();
   renderCampaignsList();
   populateBulkCampSelect();
   renderKPIWeights();
