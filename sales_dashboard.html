@@ -4062,6 +4062,23 @@ const GistSync = (() => {
       if (!claimsRes.ok) return { ok:false, reason:'claims_fetch_failed' };
 
       // Populate camp_claim_* keys for back-compat readers
+      // Populate camp_claim_* keys for back-compat readers.
+      //
+      // CRITICAL: Before writing the fresh data from Supabase, we remove ALL
+      // existing camp_claim_* and bday_gift_* keys for this month. This
+      // guarantees localStorage exactly mirrors Supabase — no leftover keys
+      // for campaigns that were purged (e.g. the camp_1775396958014 cleanup).
+      // Stale keys would otherwise cause agent UI to show claims that no
+      // longer exist on the server.
+      const campPrefix = `camp_claim_${slug}_`;
+      Object.keys(localStorage)
+        .filter(k => k.startsWith(campPrefix))
+        .forEach(k => localStorage.removeItem(k));
+      // Also clear bday_gift_*_{slug} (keys end with `_${slug}`)
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('bday_gift_') && k.endsWith('_' + slug))
+        .forEach(k => localStorage.removeItem(k));
+
       let claimCount = 0;
       const claimsObj = {};
       (claimsRes.data || []).forEach(row => {
@@ -4085,13 +4102,8 @@ const GistSync = (() => {
             const bdayKey = `bday_gift_${row.agent}_${row.debtor_code}_${slug}`;
             localStorage.setItem(bdayKey, '1');
           }
-        } else if (row.status === 'rejected') {
-          // Rejected: remove from localStorage if previously set
-          localStorage.removeItem(lsKey);
-          if (row.camp_id === 'birthday_gift_auto' || /birthday|bday/i.test(row.camp_id)) {
-            localStorage.removeItem(`bday_gift_${row.agent}_${row.debtor_code}_${slug}`);
-          }
         }
+        // (rejected status: already cleared above via mass remove — no action needed)
       });
 
       // Flags per agent
