@@ -166,11 +166,11 @@ def load_sales_report():
         log(f"❌ File not found: {SALES_FILE}")
         sys.exit(1)
 
-    # Read columns A:Z — row 0 is the real header (Tranx Mth, Doc. No., etc.)
+    # Read columns A:Z (indices 0–25), skip row 1 (special ref row), use row 2 as header
     df = pd.read_excel(
         SALES_FILE,
         sheet_name=0,        # Read first sheet regardless of name (works for MD, Sheet1, etc.)
-        header=0,        # row 0 = actual headers
+        header=1,        # row index 1 = Excel row 2 = actual headers
         usecols="A:Z",
         dtype=str,       # read all as string first, cast later
         engine="openpyxl",
@@ -220,6 +220,17 @@ def load_sales_report():
     # Parse invoice date (col C) — stored as Excel serial or string
     df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
 
+    # ── Derive tranx_mth_full from date_parsed ─────────────────────────
+    # Column A "Tranx Mth" in AutoCount is unreliable (just "Oct" without
+    # year). Use the parsed invoice date to build "Oct 25" style labels
+    # that match paid_on format. Null date → empty string (falls through
+    # filters without matching anything).
+    df["tranx_mth_full"] = df["date_parsed"].apply(
+        lambda d: d.strftime("%b %y") if pd.notnull(d) else ""
+    )
+    _tmf_sample = df["tranx_mth_full"].dropna().unique().tolist()[:5]
+    log(f"  Derived tranx_mth_full samples: {_tmf_sample}")
+
     log(f"  {len(df):,} total rows loaded")
     return df
 
@@ -241,11 +252,9 @@ def load_debtors():
 # ── Filter: Scope to GRP 2A ───────────────────────────────────────────────────
 
 def filter_scope(df):
-    """Keep only GRP 2A and GRP 2 rows (strip whitespace first)."""
-    df["area_code"] = df["area_code"].str.strip()
-    ben_raw = df[df["agent"] == "BEN"]
-    scoped = df[df["area_code"].isin(["GRP 2A", "GRP 2"])].copy()
-    log(f"  Scope filter (GRP 2A + GRP 2): {len(scoped):,} rows retained")
+    """Keep only GRP 2A rows."""
+    scoped = df[df["area_code"] == SCOPE_AREA].copy()
+    log(f"  Scope filter (GRP 2A): {len(scoped):,} rows retained")
     return scoped
 
 
@@ -264,8 +273,6 @@ def calc_sales_progression(df, targets, agents, cur_month):
     # Split Canggih vs 8COM
     canggih_paid  = paid[paid["item_group"] != EIGHTCOM_GROUP]
     eightcom_paid = paid[paid["item_group"] == EIGHTCOM_GROUP]
-
-    ben_canggih = canggih_paid[canggih_paid["agent"] == "BEN"]
 
     # All rows for unpaid calc
     eightcom_all = df[df["item_group"] == EIGHTCOM_GROUP]
@@ -398,15 +405,12 @@ def calc_sales_progression(df, targets, agents, cur_month):
             }
         }
 
-        if agent == "BEN":
-            unmapped = ag_canggih[~ag_canggih['sales_type'].isin(SALES_TYPE_MAP.keys())]
-
     return result
 
 
 # ── Module 2: Brand Commission ────────────────────────────────────────────────
 
-def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_config, debtor_df=None):
+def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_config):
     """
     Per agent per brand:
       Criteria 1 — Penetration: debtors with 0 purchases in prev 3 months, buys this month
@@ -421,35 +425,8 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
     # Paid this month (for CTN target and commission calc)
     paid_cur = canggih[canggih["paid_on"] == cur_month]
 
-    # Previous 3 months data (for penetration lookback) — paid basis
+    # Previous 3 months data (for penetration lookback)
     prev_paid = canggih[canggih["paid_on"].isin(prev_months)]
-
-    # Tranx month basis (for penetration — agent has 2 months to collect)
-    # tranx_mth col has short month name e.g. "Mar"; paid_on has "Mar 26"
-    # Cross-reference: row is in cur_month if tranx_mth matches AND paid_on is cur or future
-    # Simpler: use paid_on for prev lookback, tranx_mth+year derived from date_parsed for cur
-    MONTH_ORDER_BC = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-    try:
-        _parts = cur_month.split()
-        _mon   = _parts[0]  # "Mar"
-        _yr    = int('20' + _parts[1])  # 2026
-        tranx_cur  = canggih[
-            (canggih["tranx_mth"] == _mon) &
-            (canggih["date_parsed"].dt.year == _yr)
-        ]
-        _prev_filters = []
-        for pm in prev_months:
-            _pp = pm.split()
-            _prev_filters.append(
-                (canggih["tranx_mth"] == _pp[0]) &
-                (canggih["date_parsed"].dt.year == int('20' + _pp[1]))
-            )
-        import functools, operator
-        tranx_prev = canggih[functools.reduce(operator.or_, _prev_filters)] if _prev_filters else canggih.iloc[0:0]
-    except Exception as _e:
-        log(f"  ⚠ tranx_mth filter error: {_e} — falling back to paid_on for penetration")
-        tranx_cur  = paid_cur
-        tranx_prev = prev_paid
 
     result = {}
 
@@ -460,8 +437,6 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
 
         ag_paid_cur  = paid_cur[paid_cur["agent"] == agent]
         ag_prev_paid = prev_paid[prev_paid["agent"] == agent]
-        ag_tranx_cur  = tranx_cur[tranx_cur["agent"] == agent]
-        ag_tranx_prev = tranx_prev[tranx_prev["agent"] == agent]
 
         result[agent] = {}
 
@@ -470,30 +445,23 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
 
             # ── Filter rows for this brand ──────────────────────────
             if brand == "EVO":
-                # CTN target: paid this month, rm_ctn >= 36
+                # Current month paid: item_code = EVO AND rm_ctn >= 36
                 cur_rows = ag_paid_cur[
                     (ag_paid_cur["item_code"].isin(codes)) &
                     (ag_paid_cur["rm_ctn"] >= EVO_MIN_RM_CTN)
                 ]
-                # Penetration: ordered this month (tranx_mth), rm_ctn >= 36
-                pen_cur_rows  = ag_tranx_cur[
-                    (ag_tranx_cur["item_code"].isin(codes)) &
-                    (ag_tranx_cur["rm_ctn"] >= EVO_MIN_RM_CTN)
-                ]
-                pen_prev_rows = ag_tranx_prev[ag_tranx_prev["item_code"].isin(codes)]
+                # Prev months: item_code = EVO (any price — just for penetration lookback)
+                prev_rows = ag_prev_paid[ag_prev_paid["item_code"].isin(codes)]
             else:
-                # CTN target: paid this month
-                cur_rows = ag_paid_cur[ag_paid_cur["item_code"].isin(codes)]
-                # Penetration: ordered this month (tranx_mth) — 2-month collection window
-                pen_cur_rows  = ag_tranx_cur[ag_tranx_cur["item_code"].isin(codes)]
-                pen_prev_rows = ag_tranx_prev[ag_tranx_prev["item_code"].isin(codes)]
+                cur_rows  = ag_paid_cur[ag_paid_cur["item_code"].isin(codes)]
+                prev_rows = ag_prev_paid[ag_prev_paid["item_code"].isin(codes)]
 
-            # ── Criteria 1: Penetration (ordered basis) ─────────────
-            # Debtors who ordered this brand in prev 3 months
-            prev_buyers = set(pen_prev_rows["debtor_code"].unique())
+            # ── Criteria 1: Penetration ─────────────────────────────
+            # Debtors who bought this brand in prev 3 months
+            prev_buyers = set(prev_rows["debtor_code"].unique())
 
-            # Debtors who ordered this brand this month
-            cur_buyers = set(pen_cur_rows["debtor_code"].unique())
+            # Debtors who bought this brand this month
+            cur_buyers = set(cur_rows["debtor_code"].unique())
 
             # Penetration = debtors in cur_buyers who were NOT in prev_buyers
             new_penetrations = cur_buyers - prev_buyers
@@ -501,20 +469,14 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
             penetration_target = brand_tgt.get("penetration_target", 0)
             penetration_hit    = penetration_count >= penetration_target if penetration_target else False
 
-            # ── Criteria 2: CTN Target (ordered basis — 2 month collection window) ──
-            # Use tranx_mth rows for CTN count (includes unpaid)
-            if brand == "EVO":
-                ctn_rows = pen_cur_rows  # already filtered by rm_ctn >= 36
-            else:
-                ctn_rows = pen_cur_rows
-            ctn_sold   = round(float(ctn_rows["qty_ctn"].sum()), 2)
+            # ── Criteria 2: CTN Target ──────────────────────────────
+            ctn_sold   = round(float(cur_rows["qty_ctn"].sum()), 2)
             ctn_target = brand_tgt.get("ctn_target", 0)
             ctn_hit    = ctn_sold >= ctn_target if ctn_target else False
 
-            # Commission paid on PAID CTN only (not ordered)
-            paid_ctn_sold = round(float(cur_rows["qty_ctn"].sum()), 2)
+            # ── Commission ──────────────────────────────────────────
             both_hit   = penetration_hit and ctn_hit
-            comm_earned = round(paid_ctn_sold * 1.80, 2) if both_hit else 0.0
+            comm_earned = round(ctn_sold * 1.80, 2) if both_hit else 0.0
 
             # Status label
             if both_hit:
@@ -529,19 +491,6 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
             all_agent_debtors = set(df[df["agent"] == agent]["debtor_code"].unique())
             non_buyers = all_agent_debtors - prev_buyers
             non_buyer_count = len(non_buyers)
-
-            # Build buyers list for drill-down (new penetrations this month)
-            buyers_list = []
-            for dcode in sorted(new_penetrations):
-                buyer_rows = ctn_rows[ctn_rows["debtor_code"] == dcode]
-                buyer_ctn = round(float(buyer_rows["qty_ctn"].sum()), 2)
-                # Get debtor name from debtor_df
-                dname = dcode
-                if debtor_df is not None and not debtor_df.empty:
-                    match = debtor_df[debtor_df.iloc[:,0].astype(str).str.strip() == str(dcode).strip()]
-                    if not match.empty and len(match.columns) > 1:
-                        dname = str(match.iloc[0,1]) if pd.notnull(match.iloc[0,1]) else dcode
-                buyers_list.append({"code": dcode, "name": dname, "ctn": buyer_ctn})
 
             result[agent][brand] = {
                 "penetration": {
@@ -564,7 +513,6 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
                 "non_buyers":     non_buyer_count,
                 "cur_buyers":     len(cur_buyers),
                 "new_penetrations": penetration_count,
-                "buyers":         buyers_list,
             }
 
     return result
@@ -572,7 +520,7 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
 
 # ── Module 3: Newbie Scheme ───────────────────────────────────────────────────
 
-def calc_newbie_scheme(df, targets, agents, cur_month, debtor_df=None):
+def calc_newbie_scheme(df, targets, agents, cur_month):
     """
     For agents flagged as newbie:
       - CTN tiers: per-agent thresholds and rewards (from agent.newbie_tiers)
@@ -607,10 +555,8 @@ def calc_newbie_scheme(df, targets, agents, cur_month, debtor_df=None):
         if not ag_info.get("is_newbie", False):
             continue  # Skip non-newbie agents
 
-        # Per-agent CTN tiers — check monthly override first, then agent default
-        mt_agent_nb = get_monthly_targets(targets, cur_month).get(agent, {})
-        mt_nb_tiers = mt_agent_nb.get("kpi_targets", {}).get("newbie_tiers", None)
-        ctn_tiers = mt_nb_tiers or ag_info.get("newbie_tiers", DEFAULT_CTN_TIERS)
+        # Per-agent CTN tiers (falls back to global default if not set)
+        ctn_tiers = ag_info.get("newbie_tiers", DEFAULT_CTN_TIERS)
         if not ctn_tiers:
             ctn_tiers = DEFAULT_CTN_TIERS
 
@@ -628,31 +574,13 @@ def calc_newbie_scheme(df, targets, agents, cur_month, debtor_df=None):
                 ctn_tier_hit = tier["threshold"]
                 ctn_reward   = tier["reward"]
 
-        # New accounts = debtors with Open Acct Date in cur_month
-        new_acc_count = 0
-        if debtor_df is not None and not debtor_df.empty:
-            cols = list(debtor_df.columns)
-            CODE_COL2 = next((c for c in cols if c.strip() in ('Code','Debtor Code')), cols[0])
-            OPEN_COL2 = next((c for c in cols if 'Open Acct' in c or c == 'Open'), None)
-            AGENT_COL2 = next((c for c in cols if c.strip() == 'Agent'), None)
-            PERSONAL_TYPES_NB = {"P-Personal","P-PERSONAL","personal","Personal","PERSONAL"}
-            TYPE_COL2 = next((c for c in cols if c.strip() in ('Debtor Type','Type')), None)
-            if OPEN_COL2 and AGENT_COL2:
-                ag_dm = debtor_df[debtor_df[AGENT_COL2].fillna('').str.strip().str.upper() == agent.upper()]
-                for _, row in ag_dm.iterrows():
-                    # Skip personal types
-                    if TYPE_COL2:
-                        dtype = str(row.get(TYPE_COL2, '') or '').strip()
-                        if dtype in PERSONAL_TYPES_NB:
-                            continue
-                    open_date = row.get(OPEN_COL2)
-                    if open_date and pd.notnull(open_date):
-                        try:
-                            od = pd.to_datetime(open_date)
-                            if od.strftime("%b %y") == cur_month:
-                                new_acc_count += 1
-                        except Exception:
-                            pass
+        # New accounts this month vs all previous
+        cur_debtors  = set(df[
+            (df["agent"] == agent) & (df["paid_on"] == cur_month)
+        ]["debtor_code"].unique())
+        prev_debtors = set(all_prev[all_prev["agent"] == agent]["debtor_code"].unique())
+        new_accounts = cur_debtors - prev_debtors
+        new_acc_count = len(new_accounts)
 
         # Account bonus tier (global)
         acc_tier_hit = None
@@ -895,7 +823,7 @@ def _parse_birth_date(val):
     except:
         return None
 
-def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_map=None, area_groups=None):
+def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_groups=None):
     """
     Preserve existing Phase 1 debtor card logic:
     - Activation status per debtor (Active / Pending / Need Reactivation)
@@ -940,14 +868,14 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
         # Exact column names from Debtor Maintenance.xlsx
         # Code, Company Name, Attention, Debtor Type, Phone 1, Area, Agent,
         # Active, Open Acct Date, Birth Date
-        CODE_COL  = next((c for c in cols if c.strip() in ('Code','Debtor Code')), cols[0] if cols else None)
-        NAME_COL  = next((c for c in cols if 'Company' in c or 'Name' in c), None)
-        ATT_COL   = next((c for c in cols if 'Attention' in c), None)
-        TYPE_COL  = next((c for c in cols if 'Debtor Type' in c or c=='Type'), None)
-        PHONE_COL = next((c for c in cols if 'Phone' in c), None)  # Phone 1
-        OPEN_COL  = next((c for c in cols if 'Open Acct' in c or 'Open' in c), None)
-        BIRTH_COL = next((c for c in cols if 'Birth' in c), None)
-        AGENT_COL = next((c for c in cols if c.strip() == 'Agent'), None)
+        CODE_COL   = next((c for c in cols if c.strip() in ('Code','Debtor Code')), cols[0] if cols else None)
+        NAME_COL   = next((c for c in cols if 'Company' in c or 'Name' in c), None)
+        ATT_COL    = next((c for c in cols if 'Attention' in c), None)
+        TYPE_COL   = next((c for c in cols if 'Debtor Type' in c or c=='Type'), None)
+        PHONE_COL  = next((c for c in cols if 'Phone' in c), None)
+        OPEN_COL   = next((c for c in cols if 'Open Acct' in c or 'Open' in c), None)
+        BIRTH_COL  = next((c for c in cols if 'Birth' in c), None)
+        AGENT_COL  = next((c for c in cols if c.strip() == 'Agent'), None)
         ACTIVE_COL = next((c for c in cols if c.strip() == 'Active'), None)
 
         log(f"  Mapped → code:{CODE_COL} name:{NAME_COL} phone:{PHONE_COL} type:{TYPE_COL} vip:{ATT_COL} agent:{AGENT_COL} active:{ACTIVE_COL}")
@@ -966,8 +894,10 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
             agent_raw = str(row.get(AGENT_COL, '') if AGENT_COL else '').strip()
             agent_raw = '' if agent_raw.lower() in ('nan', 'none') else agent_raw
 
-            active_raw = str(row.get(ACTIVE_COL, 'Checked') if ACTIVE_COL else 'Checked').strip()
-            is_dm_active = active_raw.lower() != 'unchecked'
+            dm_active = True
+            if ACTIVE_COL:
+                av = str(row.get(ACTIVE_COL, '')).strip().lower()
+                dm_active = av not in ('unchecked','false','0','n','no','inactive','nan','none','')
 
             debtor_info[code] = {
                 "name":       str(row.get(NAME_COL, code) if NAME_COL else code).strip(),
@@ -977,7 +907,7 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
                 "open_date":  row.get(OPEN_COL, None)  if OPEN_COL  else None,
                 "type":       type_raw,
                 "agent":      agent_raw,
-                "dm_active":  is_dm_active,
+                "dm_active":  dm_active,
             }
 
     # SKU groups
@@ -1007,28 +937,30 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
     for agent in agents:
         ag_data = canggih_paid[canggih_paid["agent"] == agent]
 
-        # ── Base debtor list from Debtor Maintenance (official assigned list) ──
-        # Only include Active (Checked) debtors from DM
+        # ── Base debtor list from Debtor Maintenance ──
+        # Filter out Active=Unchecked ("closed" accounts)
         dm_debtor_codes = [
             code for code, info in debtor_info.items()
             if info.get("agent", "").strip().upper() == agent.upper()
-            and info.get("dm_active", True)  # exclude Unchecked debtors
+            and info.get("dm_active", True)
         ]
-
-        # Also include any debtors found in transaction data (fallback)
-        tx_debtor_codes = list(ag_data["debtor_code"].unique())
-
-        # Build set of inactive debtor codes from DM to exclude from TX too
-        dm_inactive_codes = {
+        _excluded_inactive = [
             code for code, info in debtor_info.items()
             if info.get("agent", "").strip().upper() == agent.upper()
             and not info.get("dm_active", True)
-        }
+        ]
+        if _excluded_inactive:
+            log(f"  {agent}: {len(_excluded_inactive)} debtors excluded (Active=Unchecked)")
 
-        # Merge: DM active list is primary, tx adds any missing (excluding known inactive)
+        # TX fallback, also respecting Active=Unchecked
+        tx_debtor_codes = [
+            c for c in ag_data["debtor_code"].unique()
+            if debtor_info.get(c, {}).get("dm_active", True)
+        ]
+
+        # Merge: DM list is primary, tx adds any missing
         all_debtor_codes = list(dict.fromkeys(dm_debtor_codes + [
-            c for c in tx_debtor_codes
-            if c not in dm_debtor_codes and c not in dm_inactive_codes
+            c for c in tx_debtor_codes if c not in dm_debtor_codes
         ]))
 
         if not all_debtor_codes:
@@ -1133,14 +1065,13 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
             # Debtor info
             info = debtor_info.get(dcode, {})
 
-            # New debtor — opened in cur_month (e.g. "Mar 26")
+            # New debtor (open date within 90 days)
             is_new = False
             open_date = info.get("open_date")
             if open_date and pd.notnull(open_date):
                 try:
                     od = pd.to_datetime(open_date)
-                    od_label = od.strftime("%b %y")
-                    is_new = (od_label == cur_month)
+                    is_new = (datetime.now() - od).days <= 90
                 except Exception:
                     pass
 
@@ -1200,6 +1131,17 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
             # Avg CTN (last 3 months) for order progression
             avg_ctn = round((ctn_prev1 + ctn_prev2 + ctn_cur) / 3, 1) if any([ctn_prev1, ctn_prev2, ctn_cur]) else 0
 
+            # Personal debtors excluded from campaigns (stay in list though)
+            _dtype = (info.get("type","") or "").strip()
+            _card_is_personal = _dtype in {"P-Personal","P-PERSONAL","personal","Personal","PERSONAL"}
+            if _card_is_personal:
+                _camps = []
+            else:
+                _camps = _calc_camp_progress(
+                    dcode, agent, (campaign_map or {}),
+                    d_rows, cur_m, area_groups
+                )
+
             debtor_cards.append({
                 "debtor_code":        dcode,
                 "company_name":       info.get("name", dcode),
@@ -1229,103 +1171,52 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
                 "new_sku_status":     new_sku_status,
                 "new_sku_total":      len(new_sku_groups),
                 "sales_types":        cur_sales_types,
-                "campaigns":          _calc_camp_progress(
-                                        dcode, agent, (campaign_map or {}),
-                                        d_rows, cur_m, area_groups
-                                    ),
+                "campaigns":          _camps,
                 "brand_camp_tiers":   {},
                 "has_overdue":        has_overdue,
                 "overdue_ctn":        round(overdue_amount, 1),
             })
 
-        # Sort: active first, then pending, then need_reactivation
         order = {"active": 0, "pending": 1, "need_reactivation": 2}
         debtor_cards.sort(key=lambda x: order.get(x["status"], 3))
 
-        # Summary counts — exclude personal debtors from all counts
-        PERSONAL_TYPES_CTR = {"P-Personal", "P-PERSONAL", "personal", "Personal", "PERSONAL"}
-        def _is_countable(d):
-            return (d.get("type", "") not in PERSONAL_TYPES_CTR
-                    and d.get("debtor_type", "") not in PERSONAL_TYPES_CTR
-                    and debtor_info.get(d.get("debtor_code", ""), {}).get("dm_active", False))
+        # Personal exclusion (business rule): excluded from summary counts
+        # and KPI calc, but REMAIN in debtor_cards list for agent visibility.
+        PERSONAL_TYPES = {"P-Personal","P-PERSONAL","personal","Personal","PERSONAL"}
+        def _is_personal(d):
+            return (d.get("type","") in PERSONAL_TYPES
+                    or d.get("debtor_type","") in PERSONAL_TYPES)
+        non_personal   = [d for d in debtor_cards if not _is_personal(d)]
+        personal_count = len(debtor_cards) - len(non_personal)
 
-        active_count   = sum(1 for d in debtor_cards if d["status"] == "active" and _is_countable(d))
-        pending_count  = sum(1 for d in debtor_cards if d["status"] == "pending" and _is_countable(d))
-        # 待激活 = bought prev-prev month but missed prev month → need reactivation visit
+        # Summary counts — ALL exclude Personal
+        active_count   = sum(1 for d in non_personal if d["status"] == "active")
+        pending_count  = sum(1 for d in non_personal if d["status"] == "pending")
         inactive_count = sum(
-            1 for d in debtor_cards
+            1 for d in non_personal
             if (d.get("ctn_prev2", 0) or 0) > 0
             and (d.get("ctn_prev1", 0) or 0) == 0
             and (d.get("ctn_cur",   0) or 0) == 0
-            and _is_countable(d)
         )
-        total          = len(debtor_cards)
-
-        # 激活户口 = debtors who bought THIS month but NOT last month
-        # Any debtor returning after a missed month counts as reactivation
-        # Excludes: brand new accounts (is_new=True) — those count under new accounts KPI instead
+        total          = len(non_personal)
+        total_all      = len(debtor_cards)
         reactiv_count = sum(
-            1 for d in debtor_cards
+            1 for d in non_personal
             if (d.get("ctn_cur", 0) or 0) > 0
             and (d.get("ctn_prev1", 0) or 0) == 0
             and not d.get("is_new", False)
         )
 
-        # 持续光顾率 = debtors who bought this month ÷ total DM active debtors (excl. new this month)
-        # Only count DM-sourced debtors (not TX-only) as the base
-        # Excludes Personal type and new accounts opened this month
-        PERSONAL_TYPES = {"P-Personal", "P-PERSONAL", "personal", "Personal", "PERSONAL"}
-        dm_active_debtors = [
-            d for d in debtor_cards
-            if d.get("type", "") not in PERSONAL_TYPES
-            and d.get("debtor_type", "") not in PERSONAL_TYPES
-            and debtor_info.get(d.get("debtor_code", ""), {}).get("dm_active", False)
-            and not d.get("is_new", False)  # exclude new accounts opened this month
-        ]
-        np_total  = len(dm_active_debtors)
-        np_active = sum(1 for d in dm_active_debtors if (d.get("ctn_cur", 0) or 0) > 0)
+        np_total        = len(non_personal)
+        np_active       = active_count
         activation_rate = round(np_active / np_total * 100, 1) if np_total > 0 else 0
-        display_total = np_total  # DM active non-personal — matches Excel base
-
-        # Agent total 新增SKU this month
-        total_new_sku = sum(d["new_sku_count"] for d in debtor_cards)
-
-        # 新增户口 — new accounts opened this month (excl. Personal)
-        new_accounts_count = sum(
-            1 for d in debtor_cards
-            if d.get("is_new", False)
-            and d.get("type", "") not in PERSONAL_TYPES
-            and d.get("debtor_type", "") not in PERSONAL_TYPES
-        )
-
-        # 新增VIP — new VIP accounts opened this month
-        new_vip_count = sum(
-            1 for d in debtor_cards
-            if d.get("is_new", False)
-            and d.get("vip", False)
-            and d.get("type", "") not in PERSONAL_TYPES
-        )
-
-        # Read KPI targets and manual actuals from monthly_targets
-        mt_agent = get_monthly_targets(targets or {}, cur_month).get(agent, {})
-        mt_kpi   = mt_agent.get("kpi_targets", {})
-        def_kpi  = targets.get("agents", {}).get(agent, {}).get("kpi_targets", {})
-
-        kpi_targets_out = {
-            "new_accounts":        mt_kpi.get("new_accounts",        def_kpi.get("new_accounts", None)),
-            "vip_count":           mt_kpi.get("vip_count",           def_kpi.get("vip_count", None)),
-            "new_sku":             mt_kpi.get("new_sku",             def_kpi.get("new_sku", 17)),
-            "event":               mt_kpi.get("event",               def_kpi.get("event", None)),
-            # Manual actuals (entered via Admin → Monthly Targets)
-            "new_accounts_actual": mt_kpi.get("new_accounts_actual", None),
-            "vip_count_actual":    mt_kpi.get("vip_count_actual",    None),
-            "event_actual":        mt_kpi.get("event_actual",        None),
-            "birthday_actual":     mt_kpi.get("birthday_actual",     None),
-        }
+        total_new_sku   = sum(d.get("new_sku_count", 0) for d in non_personal)
 
         result[agent] = {
             "debtors":            debtor_cards,
-            "total_debtors":      display_total,
+            "total_debtors":      total,
+            "total_debtors_all":  total_all,
+            "personal_count":     personal_count,
             "active_count":       active_count,
             "pending_count":      pending_count,
             "reactivation_count": reactiv_count,
@@ -1335,9 +1226,7 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, targets=None, campaign_m
             "activation_active":  np_active,
             "pending_activation": inactive_count,
             "total_new_sku":      total_new_sku,
-            "new_accounts_count": new_accounts_count,
-            "new_vip_count":      new_vip_count,
-            "kpi_targets":        kpi_targets_out,
+            "exclusion_note":     "Summary counts exclude P-Personal",
         }
 
     return result
@@ -1851,15 +1740,38 @@ def calc_brand_campaigns(df, targets, agents, cur_month, prev_months, brand_conf
 # ── Team summary ──────────────────────────────────────────────────────────────
 
 
-def _calc_prev_month_ctn(df, prev_months):
-    """Sum paid CTN for the immediate previous month."""
-    if df is None or not prev_months: return 0
-    prev_m = prev_months[0] if prev_months else None
-    if not prev_m: return 0
+def _calc_prev_month_ctn(df, prev_months, cur_month=None):
+    """前月条数 (已付款) — Prior 3-month invoices paid in cur_month.
+
+    Uses tranx_mth_full (derived from invoice date column C) rather than the
+    unreliable column A which only contains month-no-year like "Oct".
+    """
+    if df is None or not prev_months or not cur_month: return 0
     try:
         canggih = df[df["item_group"] != EIGHTCOM_GROUP]
-        return round(float(canggih[canggih["paid_on"] == prev_m]["qty_ctn"].sum()), 2)
-    except: return 0
+        # Use tranx_mth_full if present (robust), fallback to tranx_mth
+        col = "tranx_mth_full" if "tranx_mth_full" in canggih.columns else "tranx_mth"
+        mask = canggih[col].isin(prev_months) & (canggih["paid_on"] == cur_month)
+        return round(float(canggih[mask]["qty_ctn"].sum()), 2)
+    except Exception as e:
+        log(f"  prev_month_ctn calc error: {e}")
+        return 0
+
+
+def _calc_cur_month_invoiced_paid(df, cur_month):
+    """本月条数 (已付款) — cur_month invoices paid in cur_month.
+
+    Uses tranx_mth_full (derived from invoice date column C).
+    """
+    if df is None or not cur_month: return 0
+    try:
+        canggih = df[df["item_group"] != EIGHTCOM_GROUP]
+        col = "tranx_mth_full" if "tranx_mth_full" in canggih.columns else "tranx_mth"
+        mask = (canggih[col] == cur_month) & (canggih["paid_on"] == cur_month)
+        return round(float(canggih[mask]["qty_ctn"].sum()), 2)
+    except Exception as e:
+        log(f"  cur_month_invoiced_paid calc error: {e}")
+        return 0
 
 def _calc_total_sales_ctn(df, cur_month):
     """Sum all (paid + unpaid) canggih CTN for current month."""
@@ -1973,8 +1885,9 @@ def calc_team_summary(sales_prog, brand_comm, agents, targets, cur_month, df=Non
         "t1_color":          color_code(pct(team_normal_ctn, t1_total)),
         "brand_summary":     brand_summary,
         "leaderboard":       leaderboard,
-        "prev_month_ctn":    _calc_prev_month_ctn(df, prev_months),
-        "total_sales_ctn":   _calc_total_sales_ctn(df, cur_month),
+        "prev_month_ctn":          _calc_prev_month_ctn(df, prev_months, cur_month),
+        "cur_month_invoiced_paid": _calc_cur_month_invoiced_paid(df, cur_month),
+        "total_sales_ctn":         _calc_total_sales_ctn(df, cur_month),
     }
 
 
@@ -1989,8 +1902,8 @@ KPI_ITEM_DEFS = [
     ("alt_channel_contact", "Alt Sales - Contact <2 days", "B",  "manual_mgmt",      0.02),
     ("alt_channel_deliver", "Alt Sales - 送货 <7 days",    "B",  "manual_mgmt",      0.03),
     ("event",               "做Event / PSR",               "B",  "manual_agent",     0.03),
-    ("new_accounts",        "开户口 (新户口)",              "B",  "auto",             0.04),
-    ("vip_count",           "VIP 招聘",                    "B",  "auto",             0.01),
+    ("new_accounts",        "开户口 (新户口)",              "B",  "manual_mgmt",      0.04),
+    ("vip_count",           "VIP 招聘",                    "B",  "manual_mgmt",      0.01),
     ("reactivation",        "激活户口",                    "B",  "auto",             0.03),
     ("new_sku",             "加SKU数量",                   "B",  "auto",             0.03),
     ("activation_rate",     "持续光顾率",                  "B",  "auto",             0.03),
@@ -2007,7 +1920,7 @@ KPI_ITEM_DEFS = [
     ("lam_lwm_pen",         "LAM+LWM Penetration",         "B",  "auto",             0.0),
     ("lam_lwm_target",      "LAM+LWM CTN Target",          "B",  "auto",             0.0),
     # Section C
-    ("birthday_campaign",   "生日礼物 Campaign",           "C",  "manual_agent",     0.01),
+    ("birthday_campaign",   "生日礼物 Campaign",           "C",  "auto_claims",      0.01),
     ("campaign_1",          "Campaign Related",            "C",  "manual_agent",     0.02),
     # Section D - Accounts dept manual scoring
     ("d_key_accuracy",      "KEY 单精准度",                "D",  "manual_accounts",  0.05),
@@ -2212,6 +2125,20 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                     "source": source, "excluded": False,
                 }
 
+            elif key in ("new_accounts", "vip_count"):
+                # Admin-entered actual via Supabase kpi_manual table.
+                # Dashboard overrides `actual` from Supabase at render time.
+                # Target still uses auto_targets (snapshot-based).
+                target = auto_targets.get(key, 1)
+                items_out[key] = {
+                    "label": label, "section": section, "weight": weight,
+                    "actual": 0, "target": target,
+                    "score": 0.0, "max_score": max_score, "pct": 0,
+                    "source": source, "excluded": False,
+                    "input_role": "admin", "audit_role": "management",
+                    "needs_supabase_fetch": True,
+                }
+
             elif key == "event":
                 actual = manual.get("event", 0) or 0
                 target = tgt("event", 16)
@@ -2225,17 +2152,20 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                 }
 
             elif key == "birthday_campaign":
+                # Target = auto birthday pool from process_data (unchanged).
+                # Actual = count of verified delivered claims from Supabase.
+                # Dashboard fetches claims + audit on KPI render, overrides actual.
                 bday_data   = kpi_config.get("_birthday_camp", {})
                 auto_target = bday_data.get("by_agent", {}).get(agent, 0)
-                actual      = manual.get("birthday_campaign", 0) or 0
-                sc          = score_item(actual, auto_target, weight) if auto_target else 0
                 items_out[key] = {
                     "label": label, "section": section, "weight": weight,
-                    "actual": actual, "target": auto_target,
-                    "score": sc, "max_score": max_score,
-                    "pct": round(actual / auto_target * 100, 1) if auto_target else 0,
+                    "actual": 0, "target": auto_target,   # actual overridden by dashboard
+                    "score": 0.0, "max_score": max_score,
+                    "pct": 0,
                     "source": source, "excluded": False,
-                    "input_role": "agent", "audit_role": "management",
+                    "input_role": "none",        # agent can NOT edit directly
+                    "audit_role": "management",  # admin verifies via campaign_audit.html
+                    "needs_supabase_fetch": True,
                 }
 
             elif key in ("alt_channel_contact", "alt_channel_deliver",
@@ -2358,7 +2288,7 @@ def calc_working_days(targets=None, cur_month=None):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(override_month=None, fast=False):
+def main():
     log("=" * 60)
     log("MD Sales Dashboard — process_data.py (Phase 2)")
     log("=" * 60)
@@ -2366,22 +2296,6 @@ def main(override_month=None, fast=False):
     today      = date.today()
     cur_month  = current_month_label(today)
     prev_months = prev_month_labels(3, today)
-
-    # ── Month override (e.g. py process_data.py --month "Mar 26") ──
-    if override_month:
-        cur_month = override_month.strip()
-        log(f"⚠  Month override: {cur_month}")
-        # Recalculate prev_months based on override
-        MONTH_ORDER = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-        try:
-            parts = cur_month.split()
-            mon_idx = MONTH_ORDER.index(parts[0])
-            yr = int('20' + parts[1])
-            from datetime import date as _date
-            override_date = _date(yr, mon_idx + 1, 1)
-            prev_months = prev_month_labels(3, override_date)
-        except Exception as e:
-            log(f"  ⚠ Could not parse override month for prev_months: {e}")
 
     # ── Load data ──────────────────────────────────────────────────
     targets   = load_targets()
@@ -2497,24 +2411,30 @@ def main(override_month=None, fast=False):
     # ── Scope filter ───────────────────────────────────────────────
     df = filter_scope(df_raw)
 
-    ben_all = df[df["agent"] == "BEN"]
-    ben_mar = ben_all[ben_all["paid_on"] == "Mar 26"]
-
     # ── Brand config (from targets.json or default) ─────────────────
     brand_config = targets.get("brand_config", DEFAULT_BRAND_CONFIG)
     group_brand_config = targets.get("group_brand_config", DEFAULT_GROUP_BRAND_CONFIG)
 
     # ── Agent list ─────────────────────────────────────────────────
-    # Use agents defined in targets.json; fall back to agents found in data
     agents_from_targets = list(targets.get("agents", {}).keys())
     agents_from_data    = sorted(df["agent"].unique().tolist())
-    agents = agents_from_targets if agents_from_targets else agents_from_data
-    agents = [a for a in agents if a]  # remove blanks
-    # Filter out inactive agents (active=False in targets.json)
-    # Archived agents (archived=True) are also excluded from current view
-    agents = [a for a in agents if targets.get("agents", {}).get(a, {}).get("active", True) != False]
-    agents = [a for a in agents if not targets.get("agents", {}).get(a, {}).get("archived", False)]
-    log(f"Agents: {agents}")
+    raw_agents = agents_from_targets if agents_from_targets else agents_from_data
+    raw_agents = [a for a in raw_agents if a]
+    # Archived agents excluded from EVERYWHERE (they've left the company)
+    raw_agents = [a for a in raw_agents if not targets.get("agents", {}).get(a, {}).get("archived", False)]
+
+    # Two agent lists:
+    #   all_agents  = includes active=false (e.g. JW) for company-wide totals
+    #   agents      = active only - for dropdowns, per-agent rankings, cards
+    # Business rule: "JW (active=False) hidden from agent dashboard
+    #   but CTN counts in team totals"
+    all_agents = list(raw_agents)
+    agents     = [a for a in raw_agents
+                  if targets.get("agents", {}).get(a, {}).get("active", True) != False]
+    inactive_agents = [a for a in all_agents if a not in agents]
+    log(f"Active agents:   {agents}")
+    if inactive_agents:
+        log(f"Inactive agents (team-totals only): {inactive_agents}")
 
     # ── Agent Inheritance — merge archived predecessor's sales into successor ──
     # For each active agent with inherits_from, inject predecessor rows into df
@@ -2573,42 +2493,27 @@ def main(override_month=None, fast=False):
             log(f"  Inheritance: added {len(rows_to_add)} rows to successors")
 
     # ── Run modules ─────────────────────────────────────────────────
-    sales_prog  = calc_sales_progression(df, targets, agents, cur_month)
-    brand_comm  = calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_config, debtor_df)
+    sales_prog  = calc_sales_progression(df, targets, all_agents, cur_month)
+    brand_comm  = calc_brand_commission(df, targets, all_agents, cur_month, prev_months, brand_config)
 
     # ── Auto-calculate penetration targets from non-buyer counts ─────────────
     targets = save_penetration_snapshot(brand_comm, targets, cur_month)
-    newbie      = calc_newbie_scheme(df, targets, agents, cur_month, debtor_df)
-    aging       = calc_aging(df, agents, cur_month)
-
-    # ── Debtor cards — skip if --fast and cached JSON exists ────────
-    month_slug   = cur_month.replace(" ", "").lower()
-    monthly_file = BASE_DIR / f"data_{month_slug}.json"
-
-    if fast and monthly_file.exists():
-        log(f"⚡ --fast mode: loading debtor cards from {monthly_file.name}")
-        with open(monthly_file, encoding="utf-8") as f:
-            cached = json.load(f)
-        debtor_cards = {
-            agent: cached["agents"].get(agent, {}).get("debtor_cards", {})
-            for agent in agents
-        }
-        log(f"   Loaded debtor cards for {len(debtor_cards)} agents from cache")
-    else:
-        if fast:
-            log(f"⚡ --fast mode requested but no cached JSON found — running full debtor calc")
-        debtor_cards = calc_debtor_cards(df, debtor_df, agents, cur_month, targets, campaign_map, area_groups)
+    newbie      = calc_newbie_scheme(df, targets, agents, cur_month)
+    aging       = calc_aging(df, all_agents, cur_month)
+    debtor_cards = calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map, area_groups)
 
     # ── Save month-start snapshot + auto-calc KPI targets ───────────────────
     targets      = save_debtor_snapshot(debtor_cards, targets, cur_month)
     group_brands = calc_group_brand_targets(df, targets, cur_month, group_brand_config)
     birthday_camp = calc_birthday_campaign(debtor_cards, targets, cur_month)
     kpi          = calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_camp, cur_month)
-    team         = calc_team_summary(sales_prog, brand_comm, agents, targets, cur_month, df_raw, prev_months)
+    team         = calc_team_summary(sales_prog, brand_comm, all_agents, targets, cur_month, df_raw, prev_months)
     working_days = calc_working_days(targets, cur_month)
     brand_camps  = calc_brand_campaigns(df, targets, agents, cur_month, prev_months, brand_config)
 
-    # ── Enrich debtor cards with brand campaign tiers ───────────────────────
+    # ── Enrich debtor cards with brand campaign tiers ──
+    # Personal debtors skipped (business rule, same as other campaigns)
+    _PERSONAL = {"P-Personal","P-PERSONAL","personal","Personal","PERSONAL"}
     for camp in brand_camps:
         for d in camp.get("debtors", []):
             agent = d.get("agent")
@@ -2617,6 +2522,7 @@ def main(override_month=None, fast=False):
             agent_cards = debtor_cards.get(agent, {}).get("debtors", [])
             for card in agent_cards:
                 if card.get("debtor_code") == code:
+                    if (card.get("debtor_type","") in _PERSONAL): break
                     if "brand_camp_tiers" not in card:
                         card["brand_camp_tiers"] = {}
                     card["brand_camp_tiers"][camp["brand"]] = {
@@ -2643,7 +2549,9 @@ def main(override_month=None, fast=False):
             "inhouse_codes":      targets.get("inhouse_codes", DEFAULT_INHOUSE_CODES),
             "scope":              SCOPE_AREA,
             "group_incentive":    targets.get("team", {}).get("incentive", None),
-            "agent_pins":         targets.get("agent_pins", {}),
+            "active_agents":      agents,
+            "all_agents":         all_agents,
+            "inactive_agents":    inactive_agents,
         }
     }
 
@@ -2660,36 +2568,16 @@ def main(override_month=None, fast=False):
             "inherit_from_month": ag_cfg.get("inherit_from_month", None),
         }
 
-    # ── Build campaign summary per agent (before stripping debtors) ──
-    camp_summary = {}
-    for agent, ag_data in output["agents"].items():
-        debtors = ag_data.get("debtor_cards", {}).get("debtors", [])
-        for d in debtors:
-            for c in d.get("campaigns", []):
-                cid = c["id"]
-                if cid not in camp_summary:
-                    camp_summary[cid] = {"name": c["name"], "type": c.get("type","other"), "agents": {}}
-                if agent not in camp_summary[cid]["agents"]:
-                    camp_summary[cid]["agents"][agent] = 0
-                camp_summary[cid]["agents"][agent] += 1
-    output["campaign_summary"] = camp_summary
-
-    # ── Write JSON (full — dashboard_data.json keeps full debtor lists for agent dashboard) ──
+    # ── Write JSON ──────────────────────────────────────────────────
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2, default=str)
 
-    # Also save monthly snapshot e.g. data_mar26.json (slim - no full debtor lists)
+    # Also save monthly snapshot e.g. data_mar26.json
     month_slug = cur_month.replace(" ", "").lower()  # "mar26"
     monthly_file = BASE_DIR / f"data_{month_slug}.json"
-    import copy
-    slim_output = copy.deepcopy(output)
-    for agent_data in slim_output.get("agents", {}).values():
-        dc = agent_data.get("debtor_cards", {})
-        if "debtors" in dc:
-            del dc["debtors"]  # Strip full debtor list (~80% of file size)
     with open(monthly_file, "w", encoding="utf-8") as f:
-        json.dump(slim_output, f, ensure_ascii=False, indent=2, default=str)
-    log(f"   Monthly snapshot saved: data_{month_slug}.json (slim)")
+        json.dump(output, f, ensure_ascii=False, indent=2, default=str)
+    log(f"   Monthly snapshot saved: data_{month_slug}.json")
 
     # Update months_index.json — list of available months
     index_file = BASE_DIR / "months_index.json"
@@ -2716,11 +2604,4 @@ def main(override_month=None, fast=False):
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="MD Sales Dashboard data processor")
-    parser.add_argument("--month", type=str, default=None,
-        help="Override current month, e.g. --month 'Mar 26'")
-    parser.add_argument("--fast", action="store_true",
-        help="Skip debtor card recalculation — reuse cached debtor data from existing JSON")
-    args = parser.parse_args()
-    main(override_month=args.month, fast=args.fast)
+    main()
