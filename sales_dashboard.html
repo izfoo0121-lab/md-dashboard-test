@@ -2535,6 +2535,121 @@ function resolveFlag(agent, debtorCode) {
   renderDebtors();
 }
 
+// ── KPI Supabase overrides (new_accounts, vip_count from admin; birthday from claims) ──
+// These 3 KPI items have actual values that live in Supabase, not in dashboard_data.json.
+// This function pulls fresh values and overlays them onto DATA.agents[agent].kpi.items,
+// then recomputes scores + section totals + grand total.
+//
+// Called by renderKPI() before the UI is drawn.
+async function applyKPIOverrides() {
+  if (!currentAgent || !DATA || !DATA.agents?.[currentAgent]?.kpi) return;
+  const month = DATA.current_month;
+  if (!month) return;
+  const kpi = DATA.agents[currentAgent].kpi;
+  const items = kpi.items || {};
+
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const baseHeaders = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+  // ── 1. Fetch kpi_manual for this agent+month ────────────────────
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/kpi_manual?select=new_accounts,vip_count&month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(currentAgent)}`;
+    const r = await fetch(url, { headers: baseHeaders });
+    if (r.ok) {
+      const rows = await r.json();
+      if (rows.length > 0) {
+        const row = rows[0];
+        if (items.new_accounts) items.new_accounts.actual = Number(row.new_accounts) || 0;
+        if (items.vip_count)    items.vip_count.actual    = Number(row.vip_count)    || 0;
+      }
+    }
+  } catch (e) { console.warn('[KPI] kpi_manual fetch failed:', e); }
+
+  // ── 2. Fetch birthday claims + audit for this agent+month ────────
+  // Birthday KPI actual = count of (submitted delivered claims) excluding rejected ones
+  // Verified = delivered AND audit.status = 'verified'
+  // Submitted = delivered AND audit.status != 'rejected' (includes pending + verified)
+  try {
+    // a) Fetch all delivered birthday claims
+    const claimsUrl = `${SUPABASE_URL}/rest/v1/claims?select=camp_id,debtor_code,status&month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(currentAgent)}`;
+    const cr = await fetch(claimsUrl, { headers: baseHeaders });
+    const claims = cr.ok ? await cr.json() : [];
+    // Filter birthday camps (BOTH union: ID contains 'birthday' or 'bday')
+    const isBirthday = (campId) => {
+      const s = String(campId || '').toLowerCase();
+      return s.includes('birthday') || s.includes('bday');
+    };
+    const deliveredBday = claims.filter(c => isBirthday(c.camp_id) && c.status === 'delivered');
+
+    // b) Fetch audit status for these claims
+    const auditUrl = `${SUPABASE_URL}/rest/v1/audit_log?select=month,agent,details&month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(currentAgent)}`;
+    const ar = await fetch(auditUrl, { headers: baseHeaders });
+    const auditRows = ar.ok ? await ar.json() : [];
+    // Build lookup: { `${campId}_${debtorCode}`: 'verified' | 'rejected' }
+    const auditMap = {};
+    auditRows.forEach(row => {
+      try {
+        const d = typeof row.details === 'string' ? JSON.parse(row.details) : (row.details || {});
+        const campId = d.camp_id || d.campId;
+        const dcode  = d.debtor_code || d.debtorCode;
+        if (campId && dcode && d.status) {
+          auditMap[`${campId}_${dcode}`] = d.status;
+        }
+      } catch {}
+    });
+
+    // c) Count verified vs submitted
+    let verified = 0, submitted = 0;
+    deliveredBday.forEach(c => {
+      const key = `${c.camp_id}_${c.debtor_code}`;
+      const auditStatus = auditMap[key];
+      if (auditStatus === 'rejected') return;  // rejected doesn't count in either
+      submitted++;
+      if (auditStatus === 'verified') verified++;
+    });
+
+    if (items.birthday_campaign) {
+      items.birthday_campaign.actual = verified;
+      items.birthday_campaign.submitted = submitted;
+      items.birthday_campaign.pending = submitted - verified;
+    }
+  } catch (e) { console.warn('[KPI] birthday claims fetch failed:', e); }
+
+  // ── 3. Recompute scores for overridden items + section totals + grand total
+  const recompute = (item) => {
+    const target = Number(item.target) || 0;
+    const actual = Number(item.actual) || 0;
+    const weight = Number(item.weight) || 0;
+    if (!target || !weight) {
+      item.score = 0; item.pct = 0; return;
+    }
+    item.pct   = Math.round(actual / target * 1000) / 10;
+    item.score = Math.round(Math.min(actual / target, 1.0) * weight * 100 * 1000) / 1000;
+  };
+  ['new_accounts','vip_count','birthday_campaign'].forEach(k => {
+    if (items[k]) recompute(items[k]);
+  });
+
+  // Rebuild section_scores
+  const sections = ['A','B','C','D','E'];
+  kpi.section_scores = {};
+  sections.forEach(sec => {
+    const secItems = Object.values(items).filter(v => v.section === sec);
+    kpi.section_scores[sec] = {
+      score:     Math.round(secItems.reduce((s,v) => s + (v.score||0), 0) * 1000) / 1000,
+      max_score: Math.round(secItems.reduce((s,v) => s + (v.max_score||0), 0) * 1000) / 1000,
+    };
+  });
+
+  // Grand total + ABC total
+  kpi.grand_total = Math.round(Object.values(items).reduce((s,v) => s + (v.score||0), 0) * 1000) / 1000;
+  kpi.max_total   = Math.round(Object.values(items).reduce((s,v) => s + (v.max_score||0), 0) * 1000) / 1000;
+  kpi.total_abc   = Math.round(['A','B','C'].reduce((s,sec) => s + (kpi.section_scores[sec]?.score||0), 0) * 1000) / 1000;
+  kpi.max_abc     = Math.round(['A','B','C'].reduce((s,sec) => s + (kpi.section_scores[sec]?.max_score||0), 0) * 1000) / 1000;
+  kpi.total_pct   = kpi.max_total ? Math.round(kpi.grand_total / kpi.max_total * 1000) / 10 : 0;
+}
+
 // ── View 7: KPI ────────────────────────────────────────────────────────────
 // ── 3-Month Trend Card ─────────────────────────────────────────────────────
 function trendCard() {
@@ -2579,8 +2694,14 @@ function trendCard() {
   </div>`;
 }
 
-function renderKPI() {
+async function renderKPI() {
   if (!currentAgent || !DATA) return;
+
+  // Apply Supabase overrides first (new_accounts, vip_count, birthday).
+  // This modifies DATA.agents[agent].kpi.items in place, then recomputes
+  // section_scores + total_abc + grand_total.
+  await applyKPIOverrides();
+
   const kpi = DATA.agents[currentAgent]?.kpi || {};
   const el  = document.getElementById('kpi-content');
 
@@ -2652,31 +2773,48 @@ function renderKPI() {
       ${secItems.map(([key, item]) => {
         const barW  = Math.min(item.pct || 0, 100);
         const col   = (item.pct||0) >= 100 ? 'var(--green)' : (item.pct||0) >= 70 ? 'var(--accent)' : 'var(--red)';
-        const isManual = item.source === 'manual';
-        const canEdit  = item.input_role === 'agent';
+        const isManualMgmt  = item.source === 'manual_mgmt';
+        const isAutoClaims  = item.source === 'auto_claims';
+        const canEdit       = item.input_role === 'agent';
+
+        // Special sub-text for birthday KPI: show "X verified / Y submitted"
+        let subText;
+        if (key === 'birthday_campaign' && item.submitted != null) {
+          const pending = item.pending || 0;
+          subText = `${item.actual||0} verified / ${item.submitted||0} submitted · Target ${item.target||0}`
+                 + (pending > 0 ? ` · <span style="color:var(--accent)">${pending} pending</span>` : '');
+        } else if (item.target != null) {
+          subText = `${item.actual ?? '—'} / ${item.target} · ${(item.pct||0).toFixed(1)}%`;
+        } else {
+          subText = `Score: ${item.actual ?? '—'} pts`;
+        }
+
+        // Right-side indicator/action button
+        let rightSide;
+        if (canEdit && key !== 'birthday_campaign') {
+          rightSide = `<button class="kpi-manual-btn" onclick="openEventSheet()">✏️ ${item.actual || 'Enter'}</button>`;
+        } else if (key === 'birthday_campaign') {
+          // Read-only: no edit; show admin-verified tag
+          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Admin Audit</span>`;
+        } else if (isManualMgmt) {
+          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);">Admin entry</span>`;
+        } else if (isAutoClaims) {
+          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Auto count</span>`;
+        } else if (item.source && item.source.startsWith('manual')) {
+          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);">Manual</span>`;
+        } else if (item.source === 'agent_self_report') {
+          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Self-report</span>`;
+        } else {
+          rightSide = `<span class="kpi-item-pct" style="color:${col}">${(item.pct||0).toFixed(0)}%</span>`;
+        }
 
         return `<div class="kpi-item-row">
           <div>
             <div class="kpi-item-lbl">${item.label}</div>
-            <div class="kpi-item-sub">${
-              item.target != null
-                ? `${item.actual ?? '—'} / ${item.target} · ${(item.pct||0).toFixed(1)}%`
-                : `Score: ${item.actual ?? '—'} pts`
-            }</div>
+            <div class="kpi-item-sub">${subText}</div>
             ${item.target != null ? `<div class="kpi-item-bar-bg"><div class="kpi-item-bar-fill" style="width:${barW}%;background:${col}"></div></div>` : ''}
           </div>
-          <div>
-            ${canEdit
-              ? key === 'birthday_campaign'
-                ? `<button class="kpi-manual-btn" onclick="openBdaySheet()">🎂 ${item.actual != null ? item.actual : 'Enter'}</button>`
-                : `<button class="kpi-manual-btn" onclick="openEventSheet()">✏️ ${item.actual || 'Enter'}</button>`
-              : isManual
-                ? `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);">Manual</span>`
-                : item.source === 'agent_self_report'
-                  ? `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Self-report</span>`
-                  : `<span class="kpi-item-pct" style="color:${col}">${(item.pct||0).toFixed(0)}%</span>`
-            }
-          </div>
+          <div>${rightSide}</div>
           <div class="kpi-item-score" style="color:${col}">${(item.score||0).toFixed(2)}<span style="font-family:var(--mono);font-size:7px;color:var(--muted)">/${(item.max_score||0).toFixed(2)}</span></div>
         </div>`;
       }).join('')}

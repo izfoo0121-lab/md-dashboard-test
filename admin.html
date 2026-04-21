@@ -177,6 +177,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
     <button class="tab-btn" onclick="switchTab('brand_camps',this)">🔥 Brand Promo</button>
     <button class="tab-btn" onclick="switchTab('campaigns',this)">📢 Campaigns</button>
     <button class="tab-btn" onclick="switchTab('kpi_weights',this)">⚖️ KPI Weights</button>
+    <button class="tab-btn" onclick="switchTab('kpi_manual',this)">📊 KPI Manual</button>
     <button class="tab-btn" onclick="switchTab('pins',this)">🔑 Agent PINs</button>
     <button class="tab-btn" onclick="switchTab('sync',this)">☁️ Cloud Sync</button>
     <button class="tab-btn" onclick="switchTab('export',this)">Export / Import</button>
@@ -251,6 +252,53 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
     </div>
   </div>
 
+
+  <!-- ── KPI Manual Entry Tab ── -->
+  <div id="tab-kpi_manual" class="tab-content">
+    <div class="page-body">
+      <div class="sec-header">📊 KPI Manual Entry</div>
+      <div class="sec-sub">Enter verified actuals for 新户口 + VIP招聘 per agent per month. Changes sync to Supabase instantly — agents see updated KPI on next page load.</div>
+
+      <!-- Month selector -->
+      <div class="admin-card" style="margin-bottom:14px;">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          <label style="font-family:var(--mono);font-size:11px;color:var(--ink3);">Month:</label>
+          <select id="kpi-manual-month"
+            style="font-family:var(--mono);font-size:12px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--ink);min-width:120px;"
+            onchange="loadKpiManual()">
+          </select>
+          <button onclick="loadKpiManual()"
+            style="font-family:var(--mono);font-size:11px;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,.05);color:var(--ink);cursor:pointer;">
+            🔄 Reload
+          </button>
+          <div id="kpi-manual-status" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:auto;"></div>
+        </div>
+      </div>
+
+      <!-- Form container -->
+      <div class="admin-card">
+        <div class="sec-divider">Per-Agent Values</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);margin-bottom:8px;line-height:1.7;">
+          • <strong>新户口</strong>: verified count of new accounts opened this month (excl. Personal)<br>
+          • <strong>VIP招聘</strong>: verified count of NEW VIP members recruited this month<br>
+          • Both feed directly into KPI Section B calculation
+        </div>
+        <div id="kpi-manual-form"></div>
+        <button class="save-btn" onclick="saveKpiManual()" style="margin-top:14px;">💾 SAVE ALL TO SUPABASE</button>
+        <div class="save-toast" id="save-toast-kpi-manual">✓ Saved</div>
+      </div>
+
+      <div class="admin-card" style="margin-top:12px;">
+        <div class="sec-divider">🎂 生日礼物 Campaign (auto-counted)</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);line-height:1.7;">
+          Birthday KPI is <strong>NOT entered here</strong>. It is auto-counted from:<br>
+          &nbsp;&nbsp;• Agent clicks "Delivered" on birthday claims in Camps tab<br>
+          &nbsp;&nbsp;• Admin verifies claims in <a href="campaign_audit.html" target="_blank" style="color:var(--accent);">campaign_audit.html</a><br>
+          &nbsp;&nbsp;• KPI actual = count of VERIFIED delivered claims (Both 'birthday_gift_auto' + 'camp_birthday_*')
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- ── Agent PINs Tab ── -->
   <div id="tab-pins" class="tab-content">
@@ -894,6 +942,138 @@ const DEFAULT_AGENT_PINS = {
   'GT138888':'0000'
 };
 
+// ═══════════════════════════════════════════════════════════════════════
+// KPI Manual Entry (new_accounts + vip_count)
+// ═══════════════════════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+
+// Populate month selector on first tab open
+function initKpiManualMonths() {
+  const sel = document.getElementById('kpi-manual-month');
+  if (!sel || sel.options.length) return;
+  // Build list: 6 months back + current + 3 forward
+  const MONTH_ORDER = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const now = new Date();
+  const months = [];
+  for (let offset = -6; offset <= 3; offset++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const label = `${MONTH_ORDER[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`;
+    months.push(label);
+  }
+  sel.innerHTML = months.map(m => `<option value="${m}">${m}</option>`).join('');
+  // Default to current month
+  const curLbl = `${MONTH_ORDER[now.getMonth()]} ${String(now.getFullYear()).slice(-2)}`;
+  sel.value = curLbl;
+}
+
+async function loadKpiManual() {
+  initKpiManualMonths();
+  const month = document.getElementById('kpi-manual-month').value;
+  const form  = document.getElementById('kpi-manual-form');
+  const statusEl = document.getElementById('kpi-manual-status');
+  if (!month || !form) return;
+
+  statusEl.textContent = 'Loading...';
+
+  // Fetch all agents from CONFIG
+  const agents = Object.keys(CONFIG.agents || {}).filter(a =>
+    !CONFIG.agents[a]?.archived        // skip archived
+  );
+  if (!agents.length) {
+    form.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;">No agents configured. Add agents in Agent Targets tab first.</div>';
+    statusEl.textContent = '';
+    return;
+  }
+
+  // Fetch existing values from Supabase
+  let rows = [];
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/kpi_manual?select=*&month=eq.${encodeURIComponent(month)}`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
+    if (r.ok) rows = await r.json();
+    statusEl.textContent = `✓ Loaded ${rows.length} record(s) from Supabase`;
+    statusEl.style.color = 'var(--green, #3ddc84)';
+  } catch (e) {
+    statusEl.textContent = '⚠ Supabase fetch failed — enter new values';
+    statusEl.style.color = 'var(--accent, #ffa500)';
+  }
+
+  const existing = {};
+  rows.forEach(r => { existing[r.agent] = r; });
+
+  // Render form: one row per agent
+  form.innerHTML = `
+    <div style="display:grid;grid-template-columns:100px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:2px solid var(--border);font-family:var(--mono);font-size:9px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em;">
+      <div>Agent</div>
+      <div>新户口 (new_accounts)</div>
+      <div>VIP招聘 (vip_count)</div>
+    </div>
+  ` + agents.map(agent => {
+    const row = existing[agent] || {};
+    return `<div style="display:grid;grid-template-columns:100px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
+      <div style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink);">${agent}</div>
+      <input type="number" id="kpi_m_new_${agent}" min="0" value="${row.new_accounts ?? 0}" step="1"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
+      <input type="number" id="kpi_m_vip_${agent}" min="0" value="${row.vip_count ?? 0}" step="1"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
+    </div>`;
+  }).join('');
+}
+
+async function saveKpiManual() {
+  const month = document.getElementById('kpi-manual-month').value;
+  if (!month) { alert('Select a month first'); return; }
+
+  const agents = Object.keys(CONFIG.agents || {}).filter(a => !CONFIG.agents[a]?.archived);
+  const payload = agents.map(agent => {
+    const newAccInput = document.getElementById(`kpi_m_new_${agent}`);
+    const vipInput    = document.getElementById(`kpi_m_vip_${agent}`);
+    if (!newAccInput || !vipInput) return null;
+    return {
+      month, agent,
+      new_accounts: parseInt(newAccInput.value) || 0,
+      vip_count:    parseInt(vipInput.value) || 0,
+      updated_at:   new Date().toISOString(),
+      updated_by:   'admin_ui'
+    };
+  }).filter(Boolean);
+
+  if (!payload.length) { alert('No agents to save'); return; }
+
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/kpi_manual?on_conflict=month,agent`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      alert('Supabase save failed: ' + r.status + '\n' + err.slice(0, 300));
+      return;
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+    return;
+  }
+
+  const toast = document.getElementById('save-toast-kpi-manual');
+  if (toast) {
+    toast.textContent = `✓ Saved ${payload.length} agent record(s) for ${month}`;
+    toast.style.display = 'block';
+    setTimeout(() => toast.style.display = 'none', 3000);
+  }
+
+  // Re-load to confirm
+  setTimeout(() => loadKpiManual(), 500);
+}
+
 async function renderPinForm() {
   const container = document.getElementById('pin-management-form');
   if (!container) return;
@@ -1102,6 +1282,7 @@ function switchTab(tab, el) {
   document.getElementById('tab-' + tab).classList.add('active');
   el.classList.add('active');
   if (tab === 'pins') renderPinForm();
+  if (tab === 'kpi_manual') loadKpiManual();
   if (tab === 'sync') {
     const cfg = typeof GistSync !== 'undefined' ? GistSync.getConfig() : {};
     if (cfg.token) document.getElementById('gist-token-input').value = cfg.token;
