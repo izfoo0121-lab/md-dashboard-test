@@ -1798,7 +1798,9 @@ function renderCampaignsMgmt() {
       // key format: agent_campId_debtorCode
       const parts = key.split('_');
       const debtorCode = parts[parts.length - 1];
-      const s = c.status || ((c.ts || c.bulk) ? 'delivered' : 'pending');
+      // Treat 'verified' (audited+approved) as 'delivered' for pool-counting purposes
+      let s = c.status || ((c.ts || c.bulk) ? 'delivered' : 'pending');
+      if (s === 'verified') s = 'delivered';
       // Priority: delivered > refused > next_visit > not_in > removed > pending
       const priority = { delivered:5, refused:4, next_visit:3, not_in:2, removed:1, pending:0 };
       if (!debtorStatuses[debtorCode] || (priority[s]||0) > (priority[debtorStatuses[debtorCode]]||0)) {
@@ -1845,7 +1847,8 @@ function renderCampaignsMgmt() {
         const claim = claims[key];
         if (!claim) return;
         if (claim.status === 'removed') agRemoved++;
-        else if (claim.status === 'delivered' || (!claim.status && claim.ts)) agDeliv++;
+        // Both 'delivered' and 'verified' count as delivered for the count
+        else if (claim.status === 'delivered' || claim.status === 'verified' || (!claim.status && claim.ts)) agDeliv++;
       });
       const agActive = agDebtors.length - agRemoved;
       const agPct    = agActive > 0 ? Math.min(Math.round(agDeliv / agActive * 100), 100) : 0;
