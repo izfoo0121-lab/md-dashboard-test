@@ -2368,8 +2368,14 @@ function renderGroupBrandTargets() {
     </div>`;
 
   // ── Right panel summary ────────────────────────────────────────────────
+  // 前月条数 (已付款) = Prior 3-month invoices paid in cur_month
+  // 本月条数 (已付款) = cur_month invoices paid in cur_month
+  // 总共条数 (已付款) = sum of both = all Canggih paid in cur_month
+  // (They are disjoint: tranx_mth in prev-3-months XOR tranx_mth == cur_month)
   const prevMonthCtn    = team.prev_month_ctn   || 0;
-  const curMonthPaid    = team.team_canggih_ctn  || 0;
+  const curMonthPaid    = team.cur_month_invoiced_paid != null
+                            ? team.cur_month_invoiced_paid
+                            : (team.team_canggih_ctn || 0);  // back-compat fallback
   const totalPaidCtn    = prevMonthCtn + curMonthPaid;
   const totalUnpaidCtn  = team.team_8com_unpaid  || 0;
   const totalSalesCtn   = team.total_sales_ctn   || 0;
