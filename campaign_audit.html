@@ -110,7 +110,6 @@
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -186,14 +185,28 @@ window.addEventListener('DOMContentLoaded', () => {
     <option value="ALL">All Agents</option>
   </select>
   <button class="export-btn" onclick="exportAuditCSV()">⬇ Export CSV</button>
-  <button class="export-btn" onclick="showBulkMarkPanel()" style="background:rgba(61,220,132,.15);border-color:rgba(61,220,132,.4);color:var(--green);">📥 Bulk Mark Delivered</button>
-  <button class="export-btn" onclick="exportClaimsBackup()" style="background:rgba(77,166,255,.12);border-color:rgba(77,166,255,.3);color:var(--blue);">💾 Backup Claims</button>
-  <button class="export-btn" onclick="importClaimsBackup()" style="background:rgba(167,139,250,.12);border-color:rgba(167,139,250,.3);color:var(--purple);">📤 Restore Claims</button>
+  <button class="export-btn" onclick="window.location.href='admin.html'" style="background:rgba(61,220,132,.15);border-color:rgba(61,220,132,.4);color:var(--green);" title="Use admin.html's bulk-mark with pre-validation">📥 Bulk Mark (admin)</button>
   <input type="file" id="claims-restore-input" accept=".json" style="display:none;" onchange="doRestoreClaims(this)">
 </div>
 
 <!-- Campaign type tabs -->
 <div class="camp-tabs" id="camp-tabs"></div>
+
+<!-- Bulk approve panel -->
+<div style="background:var(--surface);border-bottom:1px solid var(--border);padding:10px 18px;">
+  <div style="max-width:900px;margin:0 auto;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <span style="font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;">⚡ Bulk Actions:</span>
+    <button onclick="bulkApproveAllPending()"
+      style="background:rgba(77,166,255,.15);border:1px solid rgba(77,166,255,.4);color:var(--blue);font-family:var(--mono);font-size:10px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;">
+      ✓ APPROVE ALL PENDING (in current view)
+    </button>
+    <button onclick="bulkApproveByCampaign()"
+      style="background:rgba(61,220,132,.1);border:1px solid rgba(61,220,132,.3);color:var(--green);font-family:var(--mono);font-size:10px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;">
+      ✓ APPROVE BY CAMPAIGN
+    </button>
+    <span id="bulk-approve-status" style="font-family:var(--mono);font-size:10px;color:var(--muted);"></span>
+  </div>
+</div>
 
 <!-- Main content -->
 <div class="page-body">
@@ -204,7 +217,7 @@ window.addEventListener('DOMContentLoaded', () => {
 <div class="toast" id="toast"></div>
 
 <script>
-const AGENTS = ['BEN','CJ','JACKY','JAMES','JW','KEAN','KEE','KF','KI-MI','KW','LEON','NMK','YI'];
+const AGENTS = ['BEN','CJ','JACKY','JAMES','JW','KEAN','KEE','KF','KI-MI','KW','LEON','NMK','SAM','YI'];
 const CAMP_EMOJI = {free_sample:'🎁',foc_sample:'🎁',birthday_gift:'🎂',promotion:'📢',festive_gift:'🧧',other:'📋'};
 const CAMP_LABEL = {free_sample:'FOC Sample',foc_sample:'FOC Sample',birthday_gift:'Birthday Gift',promotion:'Brand Promo',festive_gift:'Festive Gift',other:'Other'};
 
@@ -212,31 +225,145 @@ let DASH_DATA  = null;   // current month data
 let CAMP_DATA  = null;   // campaigns.json
 let activeCampId = 'ALL';
 
-// ── Storage helpers ────────────────────────────────────────────────────────
+// Supabase config (same as admin / sales_dashboard)
+const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+
+// In-memory caches populated from Supabase on load
+// Key format: `${agent}|${campId}|${debtorCode}`
+let CLAIMS_CACHE = {};  // value: claim row from Supabase
+let AUDIT_CACHE  = {};  // value: audit row derived from claim.status
+
+// ── Supabase fetch helpers ─────────────────────────────────────────────────
+async function fetchAllClaimsForMonth(month) {
+  // Fetch paginated — up to 5000 rows total (plenty for one month)
+  const all = [];
+  let offset = 0;
+  while (offset < 5000) {
+    const url = `${SUPABASE_URL}/rest/v1/claims?select=*&month=eq.${encodeURIComponent(month)}&order=ts.asc`;
+    const r = await fetch(url, {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Range': `${offset}-${offset+999}`
+      }
+    });
+    if (!r.ok) { console.warn('[audit] fetch failed', r.status); break; }
+    const batch = await r.json();
+    if (!batch || !batch.length) break;
+    all.push(...batch);
+    if (batch.length < 1000) break;
+    offset += 1000;
+  }
+  return all;
+}
+
+// Populate CLAIMS_CACHE and AUDIT_CACHE from Supabase rows
+function indexSupabaseRows(rows) {
+  CLAIMS_CACHE = {};
+  AUDIT_CACHE = {};
+  rows.forEach(r => {
+    const key = `${r.agent}|${r.camp_id}|${(r.debtor_code||'').toUpperCase()}`;
+    // Claim shape used by rest of this file
+    CLAIMS_CACHE[key] = {
+      ts: r.ts,
+      count: 1,
+      remark: r.remark || '',
+      bulk: !!r.bulk
+    };
+    // Audit shape derived from status
+    if (r.status === 'verified') {
+      AUDIT_CACHE[key] = { status: 'verified', ts: r.audit_ts || r.ts, by: r.audit_by || 'management' };
+    } else if (r.status === 'rejected') {
+      AUDIT_CACHE[key] = { status: 'rejected', ts: r.audit_ts || r.ts, by: r.audit_by || 'management', reason: r.audit_reason || '' };
+    }
+    // status === 'delivered' → pending (no audit entry)
+  });
+}
+
+// ── Storage helpers (now backed by Supabase cache, not localStorage) ───────
 function getClaimKey(month, agent, campId, debtorCode) {
-  return `camp_claim_${month.replace(' ','')}_${agent}_${campId}_${debtorCode}`;
+  return `${agent}|${campId}|${(debtorCode||'').toUpperCase()}`;
 }
 function getClaim(month, agent, campId, debtorCode) {
-  try { return JSON.parse(localStorage.getItem(getClaimKey(month,agent,campId,debtorCode))||'null'); }
-  catch { return null; }
+  return CLAIMS_CACHE[getClaimKey(month, agent, campId, debtorCode)] || null;
 }
 function getAuditKey(month, agent, campId, debtorCode) {
-  return `camp_audit_${month.replace(' ','')}_${agent}_${campId}_${debtorCode}`;
+  return `${agent}|${campId}|${(debtorCode||'').toUpperCase()}`;
 }
 function getAudit(month, agent, campId, debtorCode) {
-  try { return JSON.parse(localStorage.getItem(getAuditKey(month,agent,campId,debtorCode))||'null'); }
-  catch { return null; }
+  return AUDIT_CACHE[getAuditKey(month, agent, campId, debtorCode)] || null;
 }
-function saveAudit(month, agent, campId, debtorCode, auditData) {
-  localStorage.setItem(getAuditKey(month,agent,campId,debtorCode), JSON.stringify(auditData));
-  // Sync audit decisions to Gist
-  if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
-    const slug = month.replace(' ','');
-    const cache = GistSync.getCache();
-    const fileKey = `audit_${slug}`;
-    if (!cache[fileKey]) cache[fileKey] = {};
-    cache[fileKey][`${agent}_${campId}_${debtorCode}`] = auditData;
-    GistSync.push(fileKey, cache[fileKey]).catch(()=>{});
+
+// Persist an audit decision to Supabase (UPDATE claims.status)
+async function saveAudit(month, agent, campId, debtorCode, auditData) {
+  const key = `${agent}|${campId}|${(debtorCode||'').toUpperCase()}`;
+
+  // Update in-memory caches immediately (optimistic UI)
+  if (auditData.status === 'undo' || auditData.status === null) {
+    delete AUDIT_CACHE[key];
+  } else {
+    AUDIT_CACHE[key] = { ...auditData };
+  }
+
+  // Determine target status for Supabase
+  let newStatus;
+  if (!auditData.status || auditData.status === 'undo') newStatus = 'delivered';
+  else if (auditData.status === 'verified') newStatus = 'verified';
+  else if (auditData.status === 'rejected') newStatus = 'rejected';
+  else newStatus = 'delivered';
+
+  // Build body — only send columns that are certain to exist.
+  // Audit metadata is optional (column may not exist yet).
+  // Core signal: status. Always include.
+  const body = { status: newStatus };
+  // Optional: include audit metadata if columns exist (will be silently dropped if not)
+  if (auditData.ts) body.audit_ts = auditData.ts;
+  if (auditData.by) body.audit_by = auditData.by;
+  if (auditData.reason) body.audit_reason = auditData.reason;
+
+  const url = `${SUPABASE_URL}/rest/v1/claims`
+    + `?month=eq.${encodeURIComponent(month)}`
+    + `&agent=eq.${encodeURIComponent(agent)}`
+    + `&camp_id=eq.${encodeURIComponent(campId)}`
+    + `&debtor_code=eq.${encodeURIComponent(debtorCode)}`;
+
+  try {
+    let r = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(body)
+    });
+    // If audit columns don't exist, retry with status only
+    if (!r.ok && (body.audit_ts || body.audit_by || body.audit_reason)) {
+      console.warn('[audit] retrying with status-only (audit columns may not exist)');
+      r = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+    }
+    if (!r.ok) {
+      const err = await r.text();
+      console.warn('[audit] Supabase update failed', r.status, err);
+      showToast(`✗ Save failed: ${r.status}`);
+      return false;
+    }
+    return true;
+  } catch(e) {
+    console.warn('[audit] Supabase error', e);
+    showToast('✗ Network error');
+    return false;
   }
 }
 
@@ -244,6 +371,10 @@ function saveAudit(month, agent, campId, debtorCode, auditData) {
 async function loadAuditData() {
   const month = document.getElementById('month-select').value;
   const slug  = month.toLowerCase().replace(' ','');
+
+  // Show loading state
+  document.getElementById('audit-content').innerHTML = '<div class="empty">⏳ Loading from Supabase...</div>';
+
   try {
     const r = await fetch(`data_${slug}.json?v=${Date.now()}`);
     DASH_DATA = await r.json();
@@ -252,6 +383,18 @@ async function loadAuditData() {
     const r2 = await fetch(`campaigns.json?v=${Date.now()}`);
     CAMP_DATA = await r2.json();
   } catch(e) { CAMP_DATA = null; }
+
+  // Pull claims + audit state from Supabase
+  try {
+    const rows = await fetchAllClaimsForMonth(month);
+    indexSupabaseRows(rows);
+    console.log(`[audit] Loaded ${rows.length} Supabase claims for ${month}`);
+  } catch(e) {
+    console.warn('[audit] Failed to load Supabase claims', e);
+    CLAIMS_CACHE = {};
+    AUDIT_CACHE = {};
+  }
+
   buildCampTabs();
   renderAudit();
 }
@@ -272,46 +415,68 @@ function switchCamp(id, btn) {
 }
 
 // ── Main render ────────────────────────────────────────────────────────────
+// Driven by Supabase claims (CLAIMS_CACHE). Shows ALL claims that exist,
+// including bulk-imported ones, not just pre-assigned campaign entries.
 function renderAudit() {
   const month     = document.getElementById('month-select').value;
   const agentSel  = document.getElementById('agent-select').value;
-  const camps     = (CAMP_DATA?.campaigns||[]).filter(c => activeCampId==='ALL' || c.id===activeCampId);
+  const allCamps  = (CAMP_DATA?.campaigns||[]);
 
-  // Build all claim records
-  const records = []; // {camp, agent, debtor, claim, audit}
-  AGENTS.forEach(agent => {
-    if (agentSel !== 'ALL' && agent !== agentSel) return;
-    const debtors = DASH_DATA?.agents?.[agent]?.debtor_cards?.debtors || [];
-    debtors.forEach(d => {
-      (d.campaigns||[]).forEach(c => {
-        if (activeCampId !== 'ALL' && c.id !== activeCampId) return;
-        const camp  = camps.find(x=>x.id===c.id);
-        if (!camp) return;
-        const claim = getClaim(month, agent, c.id, d.debtor_code);
-        const audit = getAudit(month, agent, c.id, d.debtor_code);
-        records.push({camp, agent, debtor:d, campEntry:c, claim, audit});
-      });
+  // Build a lookup of debtor_code → debtor object (per agent)
+  // so we can show company names
+  const debtorByAgentCode = {};
+  AGENTS.forEach(a => {
+    const list = DASH_DATA?.agents?.[a]?.debtor_cards?.debtors || [];
+    list.forEach(d => {
+      debtorByAgentCode[`${a}|${(d.debtor_code||'').toUpperCase()}`] = d;
     });
+  });
+
+  // Build records from CLAIMS_CACHE (Supabase)
+  const records = [];
+  Object.entries(CLAIMS_CACHE).forEach(([key, claim]) => {
+    const [agent, campId, debtorCode] = key.split('|');
+    if (agentSel !== 'ALL' && agent !== agentSel) return;
+    if (activeCampId !== 'ALL' && campId !== activeCampId) return;
+
+    const camp = allCamps.find(c => c.id === campId) || { id:campId, name:campId, type:'other' };
+    const debtor = debtorByAgentCode[`${agent}|${debtorCode}`] || {
+      debtor_code: debtorCode,
+      company_name: debtorCode,
+      campaigns: []
+    };
+    // campEntry is the one entry in debtor.campaigns that matches this campId (for CAT info)
+    const campEntry = (debtor.campaigns||[]).find(c => c.id === campId) || {};
+
+    const audit = getAudit(month, agent, campId, debtorCode);
+    records.push({ camp, agent, debtor, campEntry, claim, audit });
+  });
+
+  // Sort: pending first, then verified, then rejected
+  records.sort((a, b) => {
+    const rank = r => (!r.audit ? 0 : r.audit.status === 'verified' ? 1 : 2);
+    const ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    return a.agent.localeCompare(b.agent);
   });
 
   // Summary
   const total    = records.length;
-  const claimed  = records.filter(r=>r.claim).length;
+  const claimed  = records.length;  // every record here IS a claim (from Supabase)
   const verified = records.filter(r=>r.audit?.status==='verified').length;
   const rejected = records.filter(r=>r.audit?.status==='rejected').length;
   const pending  = claimed - verified - rejected;
   const pct      = total > 0 ? Math.round(claimed/total*100) : 0;
 
   document.getElementById('summary-row').innerHTML = `
-    <div class="sum-card"><div class="sum-val b">${total}</div><div class="sum-lbl">Total Debtors</div></div>
-    <div class="sum-card"><div class="sum-val g">${claimed}</div><div class="sum-lbl">Claimed / Delivered</div></div>
-    <div class="sum-card"><div class="sum-val a">${pct}%</div><div class="sum-lbl">Completion Rate</div></div>
+    <div class="sum-card"><div class="sum-val b">${total}</div><div class="sum-lbl">Total Claims</div></div>
+    <div class="sum-card"><div class="sum-val g">${claimed}</div><div class="sum-lbl">Submitted</div></div>
     <div class="sum-card"><div class="sum-val b">${verified}</div><div class="sum-lbl">Verified ✓</div></div>
     <div class="sum-card"><div class="sum-val r">${rejected}</div><div class="sum-lbl">Rejected ✗</div></div>
     <div class="sum-card"><div class="sum-val a">${pending}</div><div class="sum-lbl">Pending Audit</div></div>`;
 
   if (!records.length) {
-    document.getElementById('audit-content').innerHTML = `<div class="empty">No campaign data for ${month}${activeCampId!=='ALL'?' for this campaign':''}</div>`;
+    document.getElementById('audit-content').innerHTML = `<div class="empty">No claims in Supabase for ${month}${activeCampId!=='ALL'?' for this campaign':''}</div>`;
     return;
   }
 
@@ -323,39 +488,38 @@ function renderAudit() {
   });
 
   document.getElementById('audit-content').innerHTML = Object.entries(byAgent).map(([agent, recs]) => {
-    const agentClaimed  = recs.filter(r=>r.claim).length;
+    const agentClaimed  = recs.length;
     const agentVerified = recs.filter(r=>r.audit?.status==='verified').length;
     const agentRejected = recs.filter(r=>r.audit?.status==='rejected').length;
     const agentPending  = agentClaimed - agentVerified - agentRejected;
-    const agentPct      = recs.length > 0 ? Math.round(agentClaimed/recs.length*100) : 0;
+    const agentPct      = agentClaimed > 0 ? Math.round((agentVerified+agentRejected)/agentClaimed*100) : 0;
     const progColor     = agentPct>=80?'var(--green)':agentPct>=50?'var(--gold)':'var(--red)';
 
     const rows = recs.map(r => {
       const statusLabel = r.audit?.status === 'verified' ? '✓ Verified'
                         : r.audit?.status === 'rejected' ? '✗ Rejected'
-                        : r.claim ? '● Claimed'
-                        : '○ Pending';
-      const statusClass = r.audit?.status || (r.claim ? 'claimed' : 'pending');
+                        : '● Pending';
+      const statusClass = r.audit?.status || 'claimed';
       const isFOC = r.camp.type==='foc_sample'||r.camp.type==='festive_gift'||r.camp.type==='birthday_gift';
       const actionLabel = isFOC ? 'Delivered' : 'Claimed';
 
       return `<div class="claim-row ${statusClass}" id="row-${agent}-${r.camp.id}-${r.debtor.debtor_code}">
         <div class="claim-info">
           <div class="claim-name">${r.debtor.company_name||r.debtor.debtor_code}</div>
-          <div class="claim-code">${r.debtor.debtor_code} · ${CAMP_EMOJI[r.camp.type]} ${r.camp.name}${r.campEntry.cat?' · CAT '+r.campEntry.cat:''}</div>
+          <div class="claim-code">${r.debtor.debtor_code} · ${CAMP_EMOJI[r.camp.type]||'📋'} ${r.camp.name}${r.campEntry.cat?' · CAT '+r.campEntry.cat:''}${r.claim.bulk?' · 📥 Bulk':''}</div>
           <div class="claim-meta">
-            ${r.claim ? `${actionLabel}: ${r.claim.ts||'—'}${r.claim.count>1?' · '+r.claim.count+'× claims':''}${r.claim.remark?' · "'+r.claim.remark+'"':''}` : 'Not yet ' + actionLabel.toLowerCase()}
+            ${actionLabel}: ${r.claim.ts||'—'}${r.claim.remark?' · "'+r.claim.remark+'"':''}
             ${r.audit?.status==='verified'?` · ✓ Verified ${r.audit.ts||''}`:r.audit?.status==='rejected'?` · ✗ Rejected: ${r.audit.reason||''}${r.audit.ts?' · '+r.audit.ts:''}` : ''}
           </div>
         </div>
         <div class="claim-actions">
           <span class="claim-status ${statusClass}">${statusLabel}</span>
-          ${r.claim && !r.audit ? `
+          ${!r.audit ? `
             <button class="audit-btn verify" onclick="auditClaim('${month}','${agent}','${r.camp.id}','${r.debtor.debtor_code}','verified')">✓</button>
             <button class="audit-btn reject" onclick="promptReject('${month}','${agent}','${r.camp.id}','${r.debtor.debtor_code}')">✗</button>
-          ` : r.audit ? `
+          ` : `
             <button class="audit-btn undo" onclick="auditClaim('${month}','${agent}','${r.camp.id}','${r.debtor.debtor_code}','undo')">Undo</button>
-          ` : ''}
+          `}
         </div>
       </div>`;
     }).join('');
@@ -364,11 +528,15 @@ function renderAudit() {
       <div class="agent-hdr" onclick="toggleAgentSection(this)">
         <div class="agent-name">${agent}</div>
         <div class="agent-stats">
-          <span class="stat-chip pct">${agentPct}%</span>
-          <span class="stat-chip done">${agentClaimed}/${recs.length} ${activeCampId==='ALL'?'claimed':''}</span>
-          ${agentPending>0?`<span class="stat-chip pending">${agentPending} pending audit</span>`:''}
+          <span class="stat-chip pct">${agentPct}% audited</span>
+          <span class="stat-chip done">${agentClaimed} claims</span>
+          ${agentPending>0?`<span class="stat-chip pending">${agentPending} pending</span>`:''}
           ${agentVerified>0?`<span style="font-family:var(--mono);font-size:9px;color:var(--blue);">✓${agentVerified}</span>`:''}
           ${agentRejected>0?`<span style="font-family:var(--mono);font-size:9px;color:var(--red);">✗${agentRejected}</span>`:''}
+          <button onclick="event.stopPropagation();bulkApproveAgent('${agent}')"
+            style="background:rgba(61,220,132,.12);border:1px solid rgba(61,220,132,.3);color:var(--green);font-family:var(--mono);font-size:9px;padding:4px 10px;border-radius:6px;cursor:pointer;margin-left:6px;">
+            ✓ Approve all ${agent}
+          </button>
           <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">▾</span>
         </div>
       </div>
@@ -385,13 +553,13 @@ function toggleAgentSection(hdr) {
 }
 
 // ── Audit actions ──────────────────────────────────────────────────────────
-function auditClaim(month, agent, campId, debtorCode, action) {
+async function auditClaim(month, agent, campId, debtorCode, action) {
+  const now = new Date();
+  const ts  = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+' '+now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
   if (action === 'undo') {
-    localStorage.removeItem(getAuditKey(month,agent,campId,debtorCode));
+    await saveAudit(month, agent, campId, debtorCode, {status:'undo', ts, by:'management'});
   } else {
-    const now = new Date();
-    const ts  = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+' '+now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-    saveAudit(month, agent, campId, debtorCode, {status:action, ts, by:'management'});
+    await saveAudit(month, agent, campId, debtorCode, {status:action, ts, by:'management'});
   }
   showToast(action==='verified'?'✓ Verified':action==='undo'?'Undo done':'✗ Rejected');
   renderAudit();
@@ -422,46 +590,235 @@ function promptReject(month, agent, campId, debtorCode) {
   setTimeout(()=>document.getElementById('reject-reason')?.focus(),100);
 }
 
-function confirmReject(month, agent, campId, debtorCode, btn) {
+async function confirmReject(month, agent, campId, debtorCode, btn) {
   const reason = document.getElementById('reject-reason')?.value?.trim();
   if (!reason) { document.getElementById('reject-reason').style.borderColor='var(--red)'; return; }
   const now = new Date();
   const ts  = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+' '+now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-  saveAudit(month, agent, campId, debtorCode, {status:'rejected', reason, ts, by:'management'});
+  await saveAudit(month, agent, campId, debtorCode, {status:'rejected', reason, ts, by:'management'});
   btn.closest('div[style*=fixed]').remove();
   showToast('✗ Claim rejected');
   renderAudit();
 }
 
-// ── Export CSV ─────────────────────────────────────────────────────────────
-function exportAuditCSV() {
-  const month   = document.getElementById('month-select').value;
-  const camps   = CAMP_DATA?.campaigns?.filter(c=>activeCampId==='ALL'||c.id===activeCampId)||[];
-  const rows    = [['Month','Agent','Debtor Code','Debtor Name','Campaign','Type','CAT','Claim Status','Claim Time','Remark','Audit Status','Audit Time','Reject Reason']];
+// ── Bulk approve ───────────────────────────────────────────────────────────
+// Batch UPDATE in Supabase: mark many pending claims as verified at once.
+async function _bulkVerifyInSupabase(month, claimFilters) {
+  // claimFilters: array of { agent, camp_id, debtor_code }
+  if (!claimFilters.length) return { ok:0, fail:0 };
 
-  AGENTS.forEach(agent => {
-    const debtors = DASH_DATA?.agents?.[agent]?.debtor_cards?.debtors || [];
-    debtors.forEach(d => {
-      (d.campaigns||[]).forEach(c => {
-        if (activeCampId!=='ALL'&&c.id!==activeCampId) return;
-        const camp  = camps.find(x=>x.id===c.id);
-        if (!camp) return;
-        const claim = getClaim(month,agent,c.id,d.debtor_code);
-        const audit = getAudit(month,agent,c.id,d.debtor_code);
-        rows.push([
-          month, agent,
-          d.debtor_code, (d.company_name||'').replace(/,/g,''),
-          (camp.name||'').replace(/,/g,''), CAMP_LABEL[camp.type]||camp.type,
-          c.cat||'',
-          claim?'Claimed':'Pending',
-          claim?.ts||'',
-          (claim?.remark||'').replace(/,/g,''),
-          audit?.status||'',
-          audit?.ts||'',
-          (audit?.reason||'').replace(/,/g,''),
-        ]);
+  const now = new Date();
+  const ts  = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+' '+now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  // Try with audit metadata first; fall back to status-only if unsupported
+  const bodyFull = { status:'verified', audit_ts: ts, audit_by: 'management' };
+  const bodyMin  = { status:'verified' };
+
+  let ok = 0, fail = 0;
+  const BATCH = 50;  // PATCH via or() filter — keep URL manageable
+  for (let i = 0; i < claimFilters.length; i += BATCH) {
+    const slice = claimFilters.slice(i, i + BATCH);
+    const conditions = slice.map(cf =>
+      `and(agent.eq.${encodeURIComponent(cf.agent)},camp_id.eq.${encodeURIComponent(cf.camp_id)},debtor_code.eq.${encodeURIComponent(cf.debtor_code)})`
+    ).join(',');
+    const url = `${SUPABASE_URL}/rest/v1/claims?month=eq.${encodeURIComponent(month)}&status=eq.delivered&or=(${conditions})`;
+
+    try {
+      let r = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify(bodyFull)
       });
-    });
+      // Fallback if audit columns don't exist yet
+      if (!r.ok) {
+        r = await fetch(url, {
+          method: 'PATCH',
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify(bodyMin)
+        });
+      }
+      if (r.ok) {
+        ok += slice.length;
+        // Update in-memory cache
+        slice.forEach(cf => {
+          const key = `${cf.agent}|${cf.camp_id}|${cf.debtor_code.toUpperCase()}`;
+          AUDIT_CACHE[key] = { status:'verified', ts, by:'management' };
+        });
+      } else {
+        const err = await r.text();
+        console.warn('[bulk-approve] batch failed', r.status, err);
+        fail += slice.length;
+      }
+    } catch(e) {
+      console.warn('[bulk-approve] network error', e);
+      fail += slice.length;
+    }
+  }
+
+  return { ok, fail };
+}
+
+// Approve all pending claims in the CURRENT VIEW (current campaign + agent filter)
+async function bulkApproveAllPending() {
+  const month     = document.getElementById('month-select').value;
+  const agentSel  = document.getElementById('agent-select').value;
+  const statusEl  = document.getElementById('bulk-approve-status');
+
+  // Find all pending in the currently filtered view
+  const pending = [];
+  Object.keys(CLAIMS_CACHE).forEach(key => {
+    const [agent, campId, debtorCode] = key.split('|');
+    if (agentSel !== 'ALL' && agent !== agentSel) return;
+    if (activeCampId !== 'ALL' && campId !== activeCampId) return;
+    if (AUDIT_CACHE[key]) return;  // already audited
+    pending.push({ agent, camp_id:campId, debtor_code:debtorCode });
+  });
+
+  if (!pending.length) {
+    statusEl.textContent = 'No pending claims in current view';
+    statusEl.style.color = 'var(--muted)';
+    return;
+  }
+
+  if (!confirm(`Approve ALL ${pending.length} pending claims in current view?\n\nFilter: ${activeCampId==='ALL'?'All campaigns':activeCampId}, ${agentSel==='ALL'?'All agents':agentSel}\n\nThis will set status to "verified" in Supabase.`)) return;
+
+  statusEl.textContent = `⏳ Approving ${pending.length} claims...`;
+  statusEl.style.color = 'var(--accent)';
+
+  const { ok, fail } = await _bulkVerifyInSupabase(month, pending);
+  statusEl.textContent = `✓ ${ok} approved${fail?` · ✗ ${fail} failed`:''}`;
+  statusEl.style.color = fail ? 'var(--red)' : 'var(--green)';
+  renderAudit();
+}
+
+// Approve all pending claims for a specific agent (called from per-agent button)
+async function bulkApproveAgent(agent) {
+  const month    = document.getElementById('month-select').value;
+  const statusEl = document.getElementById('bulk-approve-status');
+
+  const pending = [];
+  Object.keys(CLAIMS_CACHE).forEach(key => {
+    const [a, campId, debtorCode] = key.split('|');
+    if (a !== agent) return;
+    if (activeCampId !== 'ALL' && campId !== activeCampId) return;
+    if (AUDIT_CACHE[key]) return;
+    pending.push({ agent:a, camp_id:campId, debtor_code:debtorCode });
+  });
+
+  if (!pending.length) {
+    statusEl.textContent = `${agent}: no pending claims`;
+    statusEl.style.color = 'var(--muted)';
+    return;
+  }
+
+  if (!confirm(`Approve ${pending.length} pending claims for ${agent}?`)) return;
+
+  statusEl.textContent = `⏳ ${agent}: approving ${pending.length}...`;
+  statusEl.style.color = 'var(--accent)';
+
+  const { ok, fail } = await _bulkVerifyInSupabase(month, pending);
+  statusEl.textContent = `✓ ${agent}: ${ok} approved${fail?` · ✗ ${fail} failed`:''}`;
+  statusEl.style.color = fail ? 'var(--red)' : 'var(--green)';
+  renderAudit();
+}
+
+// Approve all pending claims for a specific campaign (prompts for campaign)
+async function bulkApproveByCampaign() {
+  const month    = document.getElementById('month-select').value;
+  const statusEl = document.getElementById('bulk-approve-status');
+  const camps    = CAMP_DATA?.campaigns || [];
+
+  // Build picker
+  const campOptions = camps.map(c => {
+    const cnt = Object.keys(CLAIMS_CACHE).filter(k => {
+      const [,campId] = k.split('|');
+      return campId === c.id && !AUDIT_CACHE[k];
+    }).length;
+    return { id: c.id, name: c.name, pending: cnt };
+  }).filter(o => o.pending > 0);
+
+  if (!campOptions.length) {
+    statusEl.textContent = 'No pending claims across any campaign';
+    statusEl.style.color = 'var(--muted)';
+    return;
+  }
+
+  const picked = prompt(
+    'Approve all pending for which campaign?\n\n' +
+    campOptions.map((o, i) => `${i+1}. ${o.name} (${o.pending} pending)`).join('\n') +
+    '\n\nType the number:'
+  );
+  const idx = parseInt(picked, 10) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= campOptions.length) return;
+
+  const chosen = campOptions[idx];
+  if (!confirm(`Approve ALL ${chosen.pending} pending claims for "${chosen.name}"?`)) return;
+
+  const pending = [];
+  Object.keys(CLAIMS_CACHE).forEach(key => {
+    const [agent, campId, debtorCode] = key.split('|');
+    if (campId !== chosen.id) return;
+    if (AUDIT_CACHE[key]) return;
+    pending.push({ agent, camp_id:campId, debtor_code:debtorCode });
+  });
+
+  statusEl.textContent = `⏳ Approving ${pending.length} for ${chosen.name}...`;
+  statusEl.style.color = 'var(--accent)';
+
+  const { ok, fail } = await _bulkVerifyInSupabase(month, pending);
+  statusEl.textContent = `✓ ${chosen.name}: ${ok} approved${fail?` · ✗ ${fail} failed`:''}`;
+  statusEl.style.color = fail ? 'var(--red)' : 'var(--green)';
+  renderAudit();
+}
+
+// ── Export CSV ─────────────────────────────────────────────────────────────
+// Iterates CLAIMS_CACHE (Supabase) so bulk-imported claims are included
+function exportAuditCSV() {
+  const month    = document.getElementById('month-select').value;
+  const agentSel = document.getElementById('agent-select').value;
+  const allCamps = CAMP_DATA?.campaigns||[];
+  const rows     = [['Month','Agent','Debtor Code','Debtor Name','Campaign','Type','CAT','Claim Status','Claim Time','Bulk','Remark','Audit Status','Audit Time','Reject Reason']];
+
+  // Build debtor lookup for company names
+  const debtorByAgentCode = {};
+  AGENTS.forEach(a => {
+    const list = DASH_DATA?.agents?.[a]?.debtor_cards?.debtors || [];
+    list.forEach(d => { debtorByAgentCode[`${a}|${(d.debtor_code||'').toUpperCase()}`] = d; });
+  });
+
+  Object.entries(CLAIMS_CACHE).forEach(([key, claim]) => {
+    const [agent, campId, debtorCode] = key.split('|');
+    if (agentSel !== 'ALL' && agent !== agentSel) return;
+    if (activeCampId !== 'ALL' && campId !== activeCampId) return;
+
+    const camp = allCamps.find(c => c.id === campId) || { name: campId, type: 'other' };
+    const debtor = debtorByAgentCode[`${agent}|${debtorCode}`] || { debtor_code: debtorCode, company_name: debtorCode, campaigns: [] };
+    const campEntry = (debtor.campaigns||[]).find(c => c.id === campId) || {};
+    const audit = getAudit(month, agent, campId, debtorCode);
+
+    rows.push([
+      month, agent,
+      debtorCode, (debtor.company_name||'').replace(/,/g,''),
+      (camp.name||'').replace(/,/g,''),
+      CAMP_LABEL[camp.type] || camp.type || '',
+      campEntry.cat || '',
+      'Claimed',
+      claim.ts || '',
+      claim.bulk ? 'Yes' : 'No',
+      (claim.remark||'').replace(/,/g,''),
+      audit?.status || 'pending',
+      audit?.ts || '',
+      (audit?.reason||'').replace(/,/g,''),
+    ]);
   });
 
   const csv  = rows.map(r=>r.join(',')).join('\n');
@@ -695,456 +1052,271 @@ document.addEventListener('DOMContentLoaded', () => {
   // (or auto-called if already authenticated this session)
 });
 
-// loadAuditData with Gist sync (called after login)
+// loadAuditData reads directly from Supabase (no Gist sync needed)
 const _origLoadAuditData = loadAuditData;
 async function loadAuditData() {
-  if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
-    const month = document.getElementById('month-select')?.value || 'Apr 26';
-    await GistSync.pull().catch(()=>{});
-    await GistSync.syncToLocal(month).catch(()=>{});
-  }
-  _origLoadAuditData();
+  // Supabase is the source of truth now — no Gist pull needed
+  await _origLoadAuditData();
 }
 
+// ── GistSync Module ─────────────────────────────────────────────────
 /**
- * MIRACLE-奇迹 MD Dashboard — Supabase Sync Module
- * Drop-in replacement for GistSync. Same API surface so HTML files need minimal changes.
- *
- * Uses Supabase PostgREST + Realtime. No token rotation, no secret scanner games.
- * The publishable key is designed to be public — safe to embed in HTML.
- *
- * Data model (in Supabase):
- *   claims      (month, agent, camp_id, debtor_code, status, remark, bulk, actor, ts)
- *   flags       (month, agent, debtor_code, reason, ts)
- *   kpi_scores  (month, agent, scores jsonb, updated_at)
- *   audit_log   (id, ts, actor, action, month, details)
- *
- * localStorage keys (unchanged — full backward compatibility):
- *   camp_claim_{slug}_{agent}_{campId}_{debtorCode}
- *   touro_debtor_flags_{agent}
- *   md_scores_{slug}
- *   md_gist_cache        (kept for read paths that still reference it)
- *   md_gist_cache_ts
- *
- * Author: TSA session 21 Apr 2026
+ * MIRACLE-奇迹 MD Dashboard — Gist Sync Module
+ * Stores all agent interactions in a GitHub Gist
+ * Cross-device, permanent, audit trail
+ * 
+ * Setup: Admin sets GIST_ID + GITHUB_PAT in admin.html once
+ * All pages load this module and use GistSync.* functions
  */
 
 const GistSync = (() => {
 
-  // ── Configuration ────────────────────────────────────────────────────
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const CONFIG_KEY = 'md_gist_config';
 
-  const CACHE_KEY    = 'md_gist_cache';
-  const CACHE_TS_KEY = 'md_gist_cache_ts';
-
-  // ── Helpers ──────────────────────────────────────────────────────────
-  function _headers(extra) {
-    return Object.assign({
-      'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json'
-    }, extra || {});
-  }
-
-  function _slug(month) { return (month || '').replace(' ',''); }
-
-  async function _rest(path, opts) {
-    opts = opts || {};
-    const url = `${SUPABASE_URL}/rest/v1/${path}`;
-    try {
-      const r = await fetch(url, {
-        method: opts.method || 'GET',
-        headers: _headers(opts.headers),
-        body: opts.body ? JSON.stringify(opts.body) : undefined
-      });
-      if (!r.ok) {
-        console.warn(`[SupabaseSync] ${opts.method||'GET'} ${path} → ${r.status}`);
-        return { ok:false, status:r.status };
-      }
-      if (r.status === 204) return { ok:true, data:null };
-      const data = await r.json();
-      return { ok:true, data };
-    } catch (e) {
-      console.warn('[SupabaseSync] network error', e);
-      return { ok:false, error:e };
-    }
-  }
-
-  // ── Public: always "configured" — no token rotation ──────────────────
-  function isConfigured() { return true; }
+  // ── Hardcoded fallback — set by admin, works for ALL devices automatically ──
+  // Token scope: gist only (cannot touch code repo — safe to embed)
+  const HARDCODED_GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
+  const HARDCODED_TOKEN   = '';  // Cleared — Supabase is source of truth now
 
   function getConfig() {
-    return { gist_id: 'supabase', token: 'supabase', backend: 'supabase' };
+    // Priority: localStorage (admin override) → hardcoded defaults
+    try {
+      const ls = JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}');
+      return {
+        gist_id: ls.gist_id || HARDCODED_GIST_ID,
+        token:   ls.token   || HARDCODED_TOKEN,
+      };
+    }
+    catch { return { gist_id: HARDCODED_GIST_ID, token: HARDCODED_TOKEN }; }
   }
 
-  function saveConfig() { /* no-op — kept for back-compat */ }
+  function saveConfig(cfg) {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
+    // Note: hardcoded values in HTML are the fallback — localStorage takes priority
+  }
 
-  // ── Cache helpers (kept so existing UI code works) ───────────────────
+  function isConfigured() {
+    const c = getConfig();
+    return !!(c.gist_id && c.token);
+  }
+
+  // ── Read all data from Gist ─────────────────────────────────────────────
+  async function pull() {
+    const { gist_id, token } = getConfig();
+    if (!gist_id || !token) return null;
+    try {
+      const r = await fetch(`https://api.github.com/gists/${gist_id}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+      });
+      if (!r.ok) return null;
+      const data = await r.json();
+      const result = {};
+      Object.entries(data.files || {}).forEach(([fname, f]) => {
+        try { result[fname.replace('.json','')] = JSON.parse(f.content || '{}'); }
+        catch { result[fname.replace('.json','')] = {}; }
+      });
+      // Cache locally
+      localStorage.setItem('md_gist_cache', JSON.stringify(result));
+      localStorage.setItem('md_gist_cache_ts', Date.now().toString());
+      return result;
+    } catch { return null; }
+  }
+
+  // ── Write a single file to Gist ─────────────────────────────────────────
+  async function push(filename, data) {
+    const { gist_id, token } = getConfig();
+    if (!gist_id || !token) return false;
+    try {
+      const r = await fetch(`https://api.github.com/gists/${gist_id}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          files: { [`${filename}.json`]: { content: JSON.stringify(data, null, 2) } }
+        })
+      });
+      return r.ok;
+    } catch { return false; }
+  }
+
+  // ── Get cached data (fast, no network) ──────────────────────────────────
   function getCache() {
-    try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); }
+    try { return JSON.parse(localStorage.getItem('md_gist_cache') || '{}'); }
     catch { return {}; }
   }
 
   function getCacheAge() {
-    const ts = localStorage.getItem(CACHE_TS_KEY);
+    const ts = localStorage.getItem('md_gist_cache_ts');
     return ts ? (Date.now() - parseInt(ts)) / 1000 : 9999;
   }
 
-  function _setCacheBucket(fileKey, obj) {
-    const cache = getCache();
-    cache[fileKey] = obj;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
-    localStorage.setItem(CACHE_TS_KEY, Date.now().toString());
-  }
-
-  // ── Low-level pull/push (back-compat shims for admin.html + audit) ───
-  // Old callers: GistSync.pull('claims_Apr26') → returns object keyed by "{agent}_{campId}_{debtorCode}"
-  async function pull(fileKey) {
-    if (!fileKey) return null;
-
-    if (fileKey.startsWith('claims_')) {
-      const month = _monthFromSlug(fileKey.replace('claims_',''));
-      const r = await _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`);
-      if (!r.ok) return null;
-      const out = {};
-      (r.data||[]).forEach(row => {
-        const k = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
-        out[k] = {
-          ts     : row.ts,
-          remark : row.remark || '',
-          bulk   : !!row.bulk,
-          status : row.status || 'delivered',
-          actor  : row.actor || 'agent'
-        };
-      });
-      _setCacheBucket(fileKey, out);
-      return out;
-    }
-
-    if (fileKey.startsWith('flags_')) {
-      const month = _monthFromSlug(fileKey.replace('flags_',''));
-      const r = await _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`);
-      if (!r.ok) return null;
-      const byAgent = {};
-      (r.data||[]).forEach(row => {
-        if (!byAgent[row.agent]) byAgent[row.agent] = {};
-        byAgent[row.agent][row.debtor_code] = {
-          reason: row.reason || '',
-          ts    : row.ts
-        };
-      });
-      _setCacheBucket(fileKey, byAgent);
-      return byAgent;
-    }
-
-    if (fileKey === 'kpi_scores') {
-      const r = await _rest(`kpi_scores?select=*`);
-      if (!r.ok) return null;
-      const byMonth = {};
-      (r.data||[]).forEach(row => {
-        if (!byMonth[row.month]) byMonth[row.month] = {};
-        byMonth[row.month][row.agent] = row.scores || {};
-      });
-      _setCacheBucket(fileKey, byMonth);
-      return byMonth;
-    }
-
-    return null;
-  }
-
-  // Old callers: GistSync.push('claims_Apr26', dataObj)
-  async function push(fileKey, data) {
-    if (!fileKey) return false;
-
-    if (fileKey.startsWith('claims_')) {
-      const month = _monthFromSlug(fileKey.replace('claims_',''));
-      const rows = Object.entries(data || {}).map(([compKey, v]) => {
-        const parts = compKey.split('_');
-        const agent = parts[0];
-        const debtorCode = parts[parts.length - 1];
-        const campId = parts.slice(1, -1).join('_');
-        return {
-          month, agent, camp_id: campId, debtor_code: debtorCode,
-          status: v.status || 'delivered',
-          remark: v.remark || '',
-          bulk  : !!v.bulk,
-          actor : v.actor || 'agent',
-          ts    : v.ts || new Date().toISOString()
-        };
-      });
-      if (!rows.length) return true;
-      const r = await _rest('claims?on_conflict=month,agent,camp_id,debtor_code', {
-        method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates' }, body: rows
-      });
-      _setCacheBucket(fileKey, data);
-      return r.ok;
-    }
-
-    if (fileKey.startsWith('flags_')) {
-      const month = _monthFromSlug(fileKey.replace('flags_',''));
-      const rows = [];
-      Object.entries(data || {}).forEach(([agent, flagsObj]) => {
-        Object.entries(flagsObj || {}).forEach(([debtorCode, v]) => {
-          rows.push({
-            month, agent, debtor_code: debtorCode,
-            reason: (v && v.reason) || '',
-            ts    : (v && v.ts) || new Date().toISOString()
-          });
-        });
-      });
-      if (!rows.length) return true;
-      const r = await _rest('flags?on_conflict=month,agent,debtor_code', {
-        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
-      });
-      _setCacheBucket(fileKey, data);
-      return r.ok;
-    }
-
-    if (fileKey === 'kpi_scores') {
-      const rows = [];
-      Object.entries(data || {}).forEach(([month, agents]) => {
-        Object.entries(agents || {}).forEach(([agent, scoresObj]) => {
-          rows.push({ month, agent, scores: scoresObj || {}, updated_at: new Date().toISOString() });
-        });
-      });
-      if (!rows.length) return true;
-      const r = await _rest('kpi_scores?on_conflict=month,agent', {
-        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
-      });
-      _setCacheBucket(fileKey, data);
-      return r.ok;
-    }
-
-    return false;
-  }
-
-  // ── Single-claim upsert (sales_dashboard.html main path) ─────────────
+  // ── Campaign Claims ──────────────────────────────────────────────────────
   async function saveClaim(month, agent, campId, debtorCode, claimData) {
-    const slug  = _slug(month);
-    const key   = `${agent}_${campId}_${debtorCode}`;
-    const lsKey = `camp_claim_${slug}_${key}`;
+    const slug = month.replace(' ','');
+    const key  = `${agent}_${campId}_${debtorCode}`;
 
-    // Fire-and-forget localStorage first (instant UX)
+    // 1. Save to localStorage immediately (instant)
+    const lsKey = `camp_claim_${slug}_${key}`;
     localStorage.setItem(lsKey, JSON.stringify(claimData));
 
-    // Upsert to Supabase
-    const row = {
-      month, agent, camp_id: campId, debtor_code: debtorCode,
-      status: claimData.status || 'delivered',
-      remark: claimData.remark || '',
-      bulk  : !!claimData.bulk,
-      actor : claimData.actor || 'agent',
-      ts    : claimData.ts || new Date().toISOString()
-    };
-    _rest('claims?on_conflict=month,agent,camp_id,debtor_code', {
-      method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body:[row]
-    }).catch(()=>{});
-
-    // Update cache bucket
-    const cache = getCache();
-    const fk = `claims_${slug}`;
-    if (!cache[fk]) cache[fk] = {};
-    cache[fk][key] = claimData;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+    // 2. Push to Gist asynchronously (background, non-blocking)
+    if (isConfigured()) {
+      const cache   = getCache();
+      const fileKey = `claims_${slug}`;
+      if (!cache[fileKey]) cache[fileKey] = {};
+      cache[fileKey][key] = claimData;
+      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+      push(fileKey, cache[fileKey]).catch(() => {});  // fire and forget
+    }
   }
 
   async function removeClaim(month, agent, campId, debtorCode) {
-    const slug = _slug(month);
+    const slug = month.replace(' ','');
     const key  = `${agent}_${campId}_${debtorCode}`;
+
+    // Remove from localStorage
     localStorage.removeItem(`camp_claim_${slug}_${key}`);
 
-    _rest(`claims?month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(agent)}&camp_id=eq.${encodeURIComponent(campId)}&debtor_code=eq.${encodeURIComponent(debtorCode)}`, {
-      method: 'DELETE'
-    }).catch(()=>{});
-
-    const cache = getCache();
-    const fk = `claims_${slug}`;
-    if (cache[fk]) {
-      delete cache[fk][key];
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+    // Remove from Gist
+    if (isConfigured()) {
+      const cache   = getCache();
+      const fileKey = `claims_${slug}`;
+      if (cache[fileKey]) {
+        delete cache[fileKey][key];
+        localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+        push(fileKey, cache[fileKey]).catch(() => {});
+      }
     }
   }
 
-  // ── Flags (per-agent bulk write) ─────────────────────────────────────
+  // ── Flags ────────────────────────────────────────────────────────────────
   async function saveFlags(month, agent, flags) {
-    const slug = _slug(month);
+    const slug    = month.replace(' ','');
+    const fileKey = `flags_${slug}`;
+
+    // localStorage
     localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(flags));
 
-    // Replace all flags for this agent+month: delete existing, then insert
-    await _rest(`flags?month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(agent)}`, { method:'DELETE' });
-
-    const rows = Object.entries(flags || {}).map(([debtorCode, v]) => ({
-      month, agent, debtor_code: debtorCode,
-      reason: (v && v.reason) || '',
-      ts    : (v && v.ts) || new Date().toISOString()
-    }));
-    if (rows.length) {
-      await _rest('flags', { method:'POST', body: rows });
+    // Gist
+    if (isConfigured()) {
+      const cache = getCache();
+      if (!cache[fileKey]) cache[fileKey] = {};
+      cache[fileKey][agent] = flags;
+      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+      push(fileKey, cache[fileKey]).catch(() => {});
     }
-
-    const cache = getCache();
-    const fk = `flags_${slug}`;
-    if (!cache[fk]) cache[fk] = {};
-    cache[fk][agent] = flags;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
   }
 
-  // ── KPI scores (by month + agent) ────────────────────────────────────
+  // ── KPI Scores ───────────────────────────────────────────────────────────
   async function saveKPIScores(month, scores) {
-    const slug = _slug(month);
+    const slug    = month.replace(' ','');
+    const fileKey = `kpi_scores`;
+
+    // localStorage
     localStorage.setItem(`md_scores_${slug}`, JSON.stringify(scores));
 
-    // scores is { AGENT: {...}, AGENT2: {...}, ... }
-    const rows = Object.entries(scores || {}).map(([agent, s]) => ({
-      month, agent, scores: s || {}, updated_at: new Date().toISOString()
-    }));
-    if (rows.length) {
-      const r = await _rest('kpi_scores?on_conflict=month,agent', {
-        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
-      });
-      if (r.ok) console.log(`[SupabaseSync] KPI scores for ${month} saved ✓`);
-    }
-
-    const cache = getCache();
-    if (!cache.kpi_scores) cache.kpi_scores = {};
-    cache.kpi_scores[month] = scores;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
-  }
-
-  // ── Bulk sync from Supabase → localStorage (page load) ──────────────
-  async function syncToLocal(month, opts) {
-    opts = opts || {};
-    const slug = _slug(month);
-    if (!slug) return { ok:false, reason:'no_month' };
-
-    try {
-      const [claimsRes, flagsRes, kpiRes] = await Promise.all([
-        _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`),
-        _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`),
-        _rest(`kpi_scores?select=*&month=eq.${encodeURIComponent(month)}`)
-      ]);
-
-      if (!claimsRes.ok) return { ok:false, reason:'claims_fetch_failed' };
-
-      // Populate camp_claim_* keys for back-compat readers
-      let claimCount = 0;
-      const claimsObj = {};
-      (claimsRes.data || []).forEach(row => {
-        const compKey = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
-        const lsKey   = `camp_claim_${slug}_${compKey}`;
-        const val = {
-          ts     : row.ts,
-          remark : row.remark || '',
-          bulk   : !!row.bulk,
-          status : row.status || 'delivered',
-          actor  : row.actor || 'agent'
-        };
-        localStorage.setItem(lsKey, JSON.stringify(val));
-        claimsObj[compKey] = val;
-        claimCount++;
-      });
-
-      // Flags per agent
-      let flagCount = 0;
-      const flagsByAgent = {};
-      (flagsRes.data || []).forEach(row => {
-        if (!flagsByAgent[row.agent]) flagsByAgent[row.agent] = {};
-        flagsByAgent[row.agent][row.debtor_code] = {
-          reason: row.reason || '',
-          ts    : row.ts
-        };
-      });
-      Object.entries(flagsByAgent).forEach(([agent, flags]) => {
-        localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(flags));
-        flagCount++;
-      });
-
-      // KPI scores
-      const kpiByAgent = {};
-      (kpiRes.data || []).forEach(row => {
-        kpiByAgent[row.agent] = row.scores || {};
-      });
-      if (Object.keys(kpiByAgent).length) {
-        localStorage.setItem(`md_scores_${slug}`, JSON.stringify(kpiByAgent));
-      }
-
-      // Refresh shared cache bucket
+    // Gist
+    if (isConfigured()) {
       const cache = getCache();
-      cache[`claims_${slug}`] = claimsObj;
-      cache[`flags_${slug}`]  = flagsByAgent;
-      if (!cache.kpi_scores) cache.kpi_scores = {};
-      cache.kpi_scores[month] = kpiByAgent;
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
-      localStorage.setItem(CACHE_TS_KEY, Date.now().toString());
-
-      console.log(`[SupabaseSync] Pulled ${claimCount} claims, ${flagCount} agents' flags for ${month}`);
-      return { ok:true, claimCount, flagCount };
-    } catch (e) {
-      console.warn('[SupabaseSync] syncToLocal error', e);
-      return { ok:false, reason:'exception', error:e };
+      if (!cache[fileKey]) cache[fileKey] = {};
+      cache[fileKey][month] = scores;
+      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+      push(fileKey, cache[fileKey]).then(ok => {
+        if (ok) console.log(`[GistSync] KPI scores for ${month} saved to Gist ✓`);
+      }).catch(() => {});
     }
   }
 
-  // ── Back-compat: setup/createGist are no-ops now ─────────────────────
-  async function setup() { return { ok:true, gist_id:'supabase', backend:'supabase' }; }
-  async function createGist() { return { ok:true, gist_id:'supabase', url:SUPABASE_URL }; }
+  // ── Sync from Gist to localStorage (on page load) ────────────────────────
+  async function syncToLocal(month) {
+    if (!isConfigured()) return;
+    const slug = month.replace(' ','');
 
-  // ── Helper: slug → "Apr 26" style month ──────────────────────────────
-  const MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function _monthFromSlug(slug) {
-    // "Apr26" → "Apr 26"
-    const m = /^([A-Za-z]{3})(\d+)$/.exec(slug || '');
-    if (m) return `${m[1]} ${m[2]}`;
-    return slug;
+    // Pull if cache is older than 5 minutes
+    let data;
+    if (getCacheAge() > 300) {
+      data = await pull();
+    } else {
+      data = getCache();
+    }
+    if (!data) return;
+
+    // Claims → localStorage
+    const claims = data[`claims_${slug}`] || {};
+    Object.entries(claims).forEach(([key, val]) => {
+      localStorage.setItem(`camp_claim_${slug}_${key}`, JSON.stringify(val));
+    });
+
+    // Flags → localStorage
+    const flags = data[`flags_${slug}`] || {};
+    Object.entries(flags).forEach(([agent, agentFlags]) => {
+      localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(agentFlags));
+    });
+
+    // KPI scores → localStorage
+    const kpi = data['kpi_scores'] || {};
+    if (kpi[month]) {
+      localStorage.setItem(`md_scores_${slug}`, JSON.stringify(kpi[month]));
+    }
+
+    console.log(`[GistSync] Synced ${Object.keys(claims).length} claims, ${Object.keys(flags).length} agents' flags for ${month}`);
   }
 
-  // ── Realtime subscription (optional, caller opts in) ─────────────────
-  // Fires cb() when claims for this month change on the server
-  let _realtimeClient = null;
-  function subscribeClaims(month, cb) {
+  // ── Setup (called from Admin to configure) ───────────────────────────────
+  async function setup(gistId, token) {
+    // Test the credentials
     try {
-      if (typeof supabase === 'undefined' || !supabase.createClient) {
-        console.warn('[SupabaseSync] realtime unavailable: supabase-js not loaded');
-        return () => {};
-      }
-      if (!_realtimeClient) {
-        _realtimeClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-      }
-      const channel = _realtimeClient
-        .channel(`claims_${_slug(month)}`)
-        .on('postgres_changes',
-          { event: '*', schema: 'public', table: 'claims', filter: `month=eq.${month}` },
-          (payload) => { try { cb(payload); } catch(e){} }
-        )
-        .subscribe();
-      return () => { try { _realtimeClient.removeChannel(channel); } catch(e){} };
-    } catch (e) {
-      console.warn('[SupabaseSync] subscribeClaims failed', e);
-      return () => {};
+      const r = await fetch(`https://api.github.com/gists/${gistId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!r.ok) return { ok: false, error: `HTTP ${r.status} — check Gist ID and token` };
+      saveConfig({ gist_id: gistId, token });
+      return { ok: true };
+    } catch(e) {
+      return { ok: false, error: e.message };
     }
   }
 
-  // ── Audit log (fire-and-forget) ──────────────────────────────────────
-  function logAudit(actor, action, month, details) {
-    _rest('audit_log', {
-      method:'POST',
-      body: [{ actor, action, month: month || null, details: details || {} }]
-    }).catch(()=>{});
+  async function createGist(token, description = 'MIRACLE-奇迹 MD Dashboard Data') {
+    try {
+      const r = await fetch('https://api.github.com/gists', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          description,
+          public: false,
+          files: {
+            'claims_init.json': { content: '{}' },
+            'flags_init.json':  { content: '{}' },
+            'kpi_scores.json':  { content: '{}' },
+          }
+        })
+      });
+      if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+      const data = await r.json();
+      saveConfig({ gist_id: data.id, token });
+      return { ok: true, gist_id: data.id, url: data.html_url };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
   }
 
-  // ── Public API (same shape as GistSync) ──────────────────────────────
   return {
-    isConfigured, getConfig, saveConfig, setup, createGist,
-    pull, push,
+    isConfigured, getConfig, setup, createGist,
+    pull, push, getCache, syncToLocal,
     saveClaim, removeClaim, saveFlags, saveKPIScores,
-    syncToLocal, getCache, getCacheAge,
-    subscribeClaims, logAudit,
-    _backend: 'supabase'
   };
+
 })();
 
-// Back-compat export
+// Export for use in other files
 if (typeof module !== 'undefined') module.exports = GistSync;
 
 </script>
