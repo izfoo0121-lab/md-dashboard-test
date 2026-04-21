@@ -734,6 +734,11 @@ window.addEventListener('DOMContentLoaded', ()=>{
     <button onclick="setCampFilter('festive_gift',this)" class="filter-chip">🧧 FESTIVE</button>
     <button onclick="setCampFilter('birthday_gift',this)" class="filter-chip">🎂 BIRTHDAY</button>
   </div>
+  <!-- Campaign name filter (populated dynamically by renderCamps) -->
+  <div id="camps-name-filter-bar" style="display:none;padding:6px 14px 8px;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto;white-space:nowrap;">
+    <span style="font-family:var(--mono);font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-right:8px;">Camps:</span>
+    <!-- Chips injected dynamically -->
+  </div>
   <div id="camps-content">
     <div style="text-align:center;padding:30px;font-family:var(--mono);font-size:11px;color:var(--muted);">Select an agent to view campaigns</div>
   </div>
@@ -1193,6 +1198,9 @@ function selectAgent(agent) {
   currentAgent = agent;
   currentPage  = 1;
   filters = { status:'all', special:null, type:'all', brand:'all' };
+  // Reset Camps tab filters when switching agents
+  _campFilter = 'all';
+  _campIdFilter = 'all';
 
   // If debtors not loaded yet, fetch from GitHub
   const dc = DATA.agents[agent]?.debtor_cards;
@@ -1404,9 +1412,6 @@ function renderDebtors() {
       const grp = SKU_GRP[filters.brand] || filters.brand;
       const st  = (d.sku_status || {})[grp];
       if (st !== 'lapsed') return false;
-      // Match Excel master convention: exclude Personal from brand penetration counts.
-      // Personal-type debtors (agents' own / family accounts) aren't real penetration targets.
-      if (d.debtor_type === 'P-Personal') return false;
     }
     return true;
   });
@@ -3108,14 +3113,41 @@ function renderCamps() {
 
   const camps = Object.values(campMap);
 
-  if (!camps.length) {
+  // ── Populate campaign-name filter chips (all camps this agent has) ──────
+  const nameBar = document.getElementById('camps-name-filter-bar');
+  if (nameBar) {
+    if (camps.length > 1) {
+      nameBar.style.display = 'block';
+      // Build chips
+      const chipHtml = camps.map(c => {
+        const emoji = CAMP_EMOJI[c.type] || '📋';
+        // Shorten name for chip
+        const shortName = (c.name || '').replace(/^🎂\s*/, '').slice(0, 24);
+        const isActive = _campIdFilter === c.id ? 'active' : '';
+        return `<button onclick="setCampIdFilter('${c.id.replace(/'/g,"\\'")}',this)" class="filter-chip ${isActive}">${emoji} ${shortName}</button>`;
+      }).join('');
+      const allActive = _campIdFilter === 'all' ? 'active' : '';
+      nameBar.innerHTML = `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-right:8px;">Camps:</span>
+        <button onclick="setCampIdFilter('all',this)" class="filter-chip ${allActive}">ALL</button>
+        ${chipHtml}`;
+    } else {
+      // Only 1 or 0 camps → hide the chip row (not useful)
+      nameBar.style.display = 'none';
+      _campIdFilter = 'all';
+    }
+  }
+
+  // ── Apply campaign-ID filter (after chips rendered so user can switch) ──
+  const filteredCamps = _campIdFilter === 'all' ? camps : camps.filter(c => c.id === _campIdFilter);
+
+  if (!filteredCamps.length) {
     el.innerHTML = `<div style="text-align:center;padding:40px;font-family:var(--mono);font-size:11px;color:var(--muted);">
       No active campaigns for ${currentAgent}
     </div>`;
     return;
   }
 
-  el.innerHTML = camps.map(c => {
+  el.innerHTML = filteredCamps.map(c => {
     const total     = c.debtors.length;
     const delivered = c.debtors.filter(d => d.visit_status?.status === 'delivered').length;
     const notIn     = c.debtors.filter(d => d.visit_status?.status === 'not_in').length;
@@ -3364,9 +3396,18 @@ function removeCampClaim(agent, campId, debtorCode) {
 
 // ── Campaign filter state ─────────────────────────────────────────────────
 let _campFilter = 'all';
+let _campIdFilter = 'all';  // Filter by specific campaign ID (chip row)
 function setCampFilter(type, btn) {
   _campFilter = type;
+  // Reset campaign-ID filter when changing type filter
+  _campIdFilter = 'all';
   document.querySelectorAll('#camps-filter-bar .filter-chip').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderCamps();
+}
+function setCampIdFilter(campId, btn) {
+  _campIdFilter = campId;
+  document.querySelectorAll('#camps-name-filter-bar .filter-chip').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   renderCamps();
 }
