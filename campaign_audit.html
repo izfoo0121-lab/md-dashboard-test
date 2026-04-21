@@ -1051,13 +1051,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // loadAuditData() is called by auditLogin() after password check
   // (or auto-called if already authenticated this session)
 });
-
-// loadAuditData reads directly from Supabase (no Gist sync needed)
-const _origLoadAuditData = loadAuditData;
-async function loadAuditData() {
-  // Supabase is the source of truth now — no Gist pull needed
-  await _origLoadAuditData();
-}
+// Note: loadAuditData is defined earlier — reads directly from Supabase.
+// No wrapper needed (old Gist sync wrapper removed — was causing recursion).
 
 // ── GistSync Module ─────────────────────────────────────────────────
 /**
