@@ -3148,7 +3148,8 @@ async function confirmBulkMark() {
   const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
   const now = new Date();
-  const ts  = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) + ' ' + now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  // Supabase `ts` column is timestamptz — needs ISO format, not display format
+  const ts = now.toISOString();
 
   const rows = pending.toCreate.map(v => ({
     month: pending.month,
