@@ -315,6 +315,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
             style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.05);color:var(--text);cursor:pointer;">
             🔄 Sync
           </button>
+          <button id="logout-btn" onclick="logout()"
+            title="Log out / switch agent"
+            style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:6px;border:1px solid rgba(255,95,95,.3);background:rgba(255,95,95,.08);color:#ff9090;cursor:pointer;">
+            ↪ Log out
+          </button>
         </div>
         <select id="month-selector-agent" onchange="switchMonth(this.value)"
           style="display:none;margin-top:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
@@ -377,24 +382,50 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
 </style>
 
 <script>
-// ── Agent PINs — set via Admin ─────────────────────────────────────────
-// Format: { AGENT_NAME: '4-digit-pin' }
-// Admin manages these in targets.json under 'agent_pins'
-const AGENT_PINS = (()=>{
-  try {
-    const pins = DATA_PINS || {};  // injected after data loads
-    return pins;
-  } catch { return {}; }
-})();
+// ── Agent PINs — fetched from Supabase ─────────────────────────────────
+// Storage priority (highest wins):
+//   1. Supabase agent_pins table (live, editable via admin.html)
+//   2. DATA.config.agent_pins  (legacy — from targets.json, not populated)
+//   3. DEFAULT_PINS below      (hardcoded fallback — should never be reached
+//                                 if Supabase is reachable)
+let _supabasePins = null;  // populated async, see fetchSupabasePins()
 
-// Fallback default PINs (overridden by targets.json)
+async function fetchSupabasePins() {
+  try {
+    const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_pins?select=agent,pin`, {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`
+      }
+    });
+    if (!r.ok) { console.warn('[PINs] Supabase fetch failed', r.status); return null; }
+    const rows = await r.json();
+    const out = {};
+    rows.forEach(row => { if (row.agent && row.pin) out[row.agent] = row.pin; });
+    _supabasePins = out;
+    // Cache to localStorage for offline reuse
+    try { localStorage.setItem('md_agent_pins_cache', JSON.stringify(out)); } catch {}
+    console.log(`[PINs] Loaded ${Object.keys(out).length} PINs from Supabase`);
+    return out;
+  } catch (e) {
+    console.warn('[PINs] error', e);
+    return null;
+  }
+}
+
+// Kick off fetch immediately (parallel with DATA load)
+fetchSupabasePins();
+
+// Fallback default PINs (last resort if Supabase AND cache AND DATA all fail)
 const DEFAULT_PINS = {
   'BEN':'1001','CJ':'1002','JACKY':'1003','JAMES':'1004',
   'JW':'1005','KEAN':'1006','KEE':'1007','KF':'1008',
-  'KI-MI':'1009','KW':'1010','LEON':'1011','NMK':'1012',
+  'KI-MI':'8888','KW':'1010','LEON':'1011','NMK':'5535',
   'YI':'1013','SAM':'1014',
   // Admin bypass
-  'GT138888':'0000'
+  'GT138888':'0121'
 };
 
 let _pin = '';
@@ -411,6 +442,24 @@ function pinPress(k) {
   if (_pin.length === 4) checkPin();
 }
 
+// Resolve PINs via layered fallback: Supabase → cached → DATA.config → DEFAULT_PINS
+function _resolvePins() {
+  const merged = Object.assign({}, DEFAULT_PINS);
+  // Layer 2: cached copy from last successful Supabase fetch
+  try {
+    const cached = JSON.parse(localStorage.getItem('md_agent_pins_cache') || 'null');
+    if (cached && typeof cached === 'object') Object.assign(merged, cached);
+  } catch {}
+  // Layer 3: DATA.config.agent_pins (legacy — usually empty)
+  try {
+    const fromTargets = (typeof DATA !== 'undefined' && DATA.config?.agent_pins) || {};
+    Object.assign(merged, fromTargets);
+  } catch {}
+  // Layer 4 (highest): fresh Supabase pull (if it finished)
+  if (_supabasePins) Object.assign(merged, _supabasePins);
+  return merged;
+}
+
 function updatePinDisplay() {
   for (let i=0;i<4;i++) {
     const d = document.getElementById('pd'+i);
@@ -420,20 +469,19 @@ function updatePinDisplay() {
   const hint = document.getElementById('pin-name-hint');
   const err  = document.getElementById('pin-err');
   err.textContent = '';
-  const allPins = Object.assign({}, DEFAULT_PINS);
-  const match = Object.entries(allPins).find(([,p])=>p===_pin);
-  hint.textContent = match && _pin.length===4 ? '' : '';
+  hint.textContent = '';
 }
 
-function checkPin() {
+async function checkPin() {
   _pinLocked = true;
-  const allPins = Object.assign({}, DEFAULT_PINS);
-
-  // Try to load from targets.json if available
-  try {
-    const fromTargets = (typeof DATA !== 'undefined' && DATA.config?.agent_pins) || {};
-    Object.assign(allPins, fromTargets);
-  } catch {}
+  // If Supabase fetch hasn't resolved yet, wait up to 2s for it
+  if (_supabasePins === null) {
+    await Promise.race([
+      fetchSupabasePins(),
+      new Promise(res => setTimeout(res, 2000))
+    ]);
+  }
+  const allPins = _resolvePins();
 
   const match = Object.entries(allPins).find(([,p])=>p===_pin);
 
@@ -465,6 +513,22 @@ function checkPin() {
       _pin=''; _pinLocked=false; updatePinDisplay();
     }, 1000);
   }
+}
+
+// ── Logout (clears session, shows PIN gate again) ──────────────────────
+function logout() {
+  if (!confirm('登出 Log out?')) return;
+  sessionStorage.removeItem('md_auth');
+  sessionStorage.removeItem('md_agent');
+  // Reset PIN state
+  _pin = '';
+  _pinLocked = false;
+  // Show gate
+  const gate = document.getElementById('pin-gate');
+  if (gate) gate.style.display = 'flex';
+  updatePinDisplay();
+  // Scroll to top
+  window.scrollTo(0, 0);
 }
 
 function lockToAgent(agentName) {
@@ -3444,6 +3508,41 @@ const GistSync = (() => {
     }
   }
 
+  // ── Paginated GET: fetches ALL rows regardless of Supabase's 1000-row default cap.
+  // Uses PostgREST "Range" header for offset-based paging. Stops when the server
+  // returns fewer rows than requested, or when a safety limit is hit.
+  async function _restAll(path, pageSize) {
+    pageSize = pageSize || 1000;
+    const MAX_PAGES = 50;        // hard safety cap = 50,000 rows
+    const all = [];
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const from = page * pageSize;
+      const to   = from + pageSize - 1;
+      try {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+          method: 'GET',
+          headers: _headers({
+            'Range-Unit': 'items',
+            'Range': `${from}-${to}`,
+            'Prefer': 'count=none'
+          })
+        });
+        if (!r.ok) {
+          console.warn(`[SupabaseSync] paged GET ${path} page ${page} → ${r.status}`);
+          break;
+        }
+        const chunk = await r.json();
+        if (!Array.isArray(chunk) || chunk.length === 0) break;
+        all.push(...chunk);
+        if (chunk.length < pageSize) break;   // last page
+      } catch (e) {
+        console.warn('[SupabaseSync] paged GET error', e);
+        break;
+      }
+    }
+    return { ok:true, data: all };
+  }
+
   // ── Public: always "configured" — no token rotation ──────────────────
   function isConfigured() { return true; }
 
@@ -3478,7 +3577,7 @@ const GistSync = (() => {
 
     if (fileKey.startsWith('claims_')) {
       const month = _monthFromSlug(fileKey.replace('claims_',''));
-      const r = await _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`);
+      const r = await _restAll(`claims?select=*&month=eq.${encodeURIComponent(month)}`);
       if (!r.ok) return null;
       const out = {};
       (r.data||[]).forEach(row => {
@@ -3497,7 +3596,7 @@ const GistSync = (() => {
 
     if (fileKey.startsWith('flags_')) {
       const month = _monthFromSlug(fileKey.replace('flags_',''));
-      const r = await _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`);
+      const r = await _restAll(`flags?select=*&month=eq.${encodeURIComponent(month)}`);
       if (!r.ok) return null;
       const byAgent = {};
       (r.data||[]).forEach(row => {
@@ -3512,7 +3611,7 @@ const GistSync = (() => {
     }
 
     if (fileKey === 'kpi_scores') {
-      const r = await _rest(`kpi_scores?select=*`);
+      const r = await _restAll(`kpi_scores?select=*`);
       if (!r.ok) return null;
       const byMonth = {};
       (r.data||[]).forEach(row => {
@@ -3693,9 +3792,9 @@ const GistSync = (() => {
 
     try {
       const [claimsRes, flagsRes, kpiRes] = await Promise.all([
-        _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`),
-        _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`),
-        _rest(`kpi_scores?select=*&month=eq.${encodeURIComponent(month)}`)
+        _restAll(`claims?select=*&month=eq.${encodeURIComponent(month)}`),
+        _restAll(`flags?select=*&month=eq.${encodeURIComponent(month)}`),
+        _restAll(`kpi_scores?select=*&month=eq.${encodeURIComponent(month)}`)
       ]);
 
       if (!claimsRes.ok) return { ok:false, reason:'claims_fetch_failed' };

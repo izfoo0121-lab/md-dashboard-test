@@ -259,20 +259,21 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
       <div class="sec-sub">Each agent uses their 4-digit PIN to login to the sales dashboard. Admin PIN 0000 gives full access. PINs are saved in targets.json.</div>
 
       <div class="admin-card">
-        <div class="sec-divider">Default PINs (edit to change)</div>
+        <div class="sec-divider">Live PINs (edit + save = instant)</div>
         <div id="pin-management-form"></div>
-        <button class="save-btn" onclick="savePins()" style="margin-top:14px;">SAVE ALL PINS → DOWNLOAD TARGETS.JSON</button>
-        <div class="save-toast" id="save-toast-pins">✓ Saved — remember to download targets.json and run bat</div>
+        <button class="save-btn" onclick="savePins()" style="margin-top:14px;">💾 SAVE PINS TO SUPABASE</button>
+        <div class="save-toast" id="save-toast-pins">✓ Saved to Supabase</div>
       </div>
 
       <div class="admin-card" style="margin-top:12px;">
         <div class="sec-divider">How it works</div>
         <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);line-height:1.7;">
-          • Agent opens sales_dashboard.html on their phone → enters 4-digit PIN<br>
-          • Dashboard auto-selects their name and locks to it (can't see other agents)<br>
-          • Admin PIN 0000 → full access, can switch between all agents<br>
-          • Session persists until browser is closed (no re-login on refresh)<br>
-          • PINs are stored in targets.json → deployed via bat run
+          • PINs live in Supabase <code>agent_pins</code> table (no bat re-run needed)<br>
+          • Agent opens sales_dashboard.html → PIN check hits Supabase live<br>
+          • Admin PIN 0121 (GT138888) → full access, can switch between all agents<br>
+          • Session persists until browser closed or agent taps ↪ Log out button<br>
+          • Change here → agents see new PIN on next login or page refresh<br>
+          • If Supabase unreachable: dashboard falls back to cached PINs, then DEFAULT_PINS
         </div>
       </div>
     </div>
@@ -893,15 +894,37 @@ const DEFAULT_AGENT_PINS = {
   'GT138888':'0000'
 };
 
-function renderPinForm() {
+async function renderPinForm() {
   const container = document.getElementById('pin-management-form');
   if (!container) return;
-  const saved = CONFIG.agent_pins || DEFAULT_AGENT_PINS;
+
+  // Try to load fresh PINs from Supabase first
+  let pinsFromSupabase = null;
+  try {
+    const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_pins?select=agent,pin`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
+    if (r.ok) {
+      const rows = await r.json();
+      pinsFromSupabase = {};
+      rows.forEach(row => { if (row.agent && row.pin) pinsFromSupabase[row.agent] = row.pin; });
+    }
+  } catch(e) { console.warn('[PINs] Supabase fetch failed', e); }
+
+  // Merge: Supabase (live) > CONFIG.agent_pins (targets.json) > DEFAULT
+  const saved = Object.assign({}, DEFAULT_AGENT_PINS, CONFIG.agent_pins || {}, pinsFromSupabase || {});
   const agents = Object.keys(CONFIG.agents || {});
-  // Include admin
   const allAgents = [...agents, 'GT138888'];
 
-  container.innerHTML = allAgents.map(agent => {
+  container.innerHTML = `
+    <div style="padding:10px;background:${pinsFromSupabase ? 'rgba(61,220,132,.08)' : 'rgba(255,165,0,.08)'};border:1px solid ${pinsFromSupabase ? 'rgba(61,220,132,.3)' : 'rgba(255,165,0,.3)'};border-radius:8px;margin-bottom:12px;font-family:var(--mono);font-size:10px;">
+      ${pinsFromSupabase
+        ? `✓ Loaded ${Object.keys(pinsFromSupabase).length} PINs from Supabase (live)`
+        : '⚠ Supabase unreachable — showing local/default PINs. Changes will not persist until connection recovers.'}
+    </div>
+  ` + allAgents.map(agent => {
     const pin = saved[agent] || DEFAULT_AGENT_PINS[agent] || '';
     const isAdmin = agent === 'GT138888';
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
@@ -917,17 +940,57 @@ function renderPinForm() {
   }).join('');
 }
 
-function savePins() {
+async function savePins() {
   const agents = [...Object.keys(CONFIG.agents || {}), 'GT138888'];
   const pins = {};
   agents.forEach(agent => {
     const el = document.getElementById('pin_' + agent);
     if (el && el.value.length === 4) pins[agent] = el.value;
   });
+
+  if (Object.keys(pins).length === 0) { alert('No valid PINs to save'); return; }
+
+  // Save to Supabase (primary, live)
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const rows = Object.entries(pins).map(([agent, pin]) => ({
+    agent, pin, updated_at: new Date().toISOString(), updated_by: 'admin_ui'
+  }));
+
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_pins?on_conflict=agent`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(rows)
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      alert('Supabase save failed: ' + r.status + ' — ' + err.slice(0, 200));
+      return;
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+    return;
+  }
+
+  // Also update local CONFIG (so any legacy code still using targets.json sees the change)
   CONFIG.agent_pins = pins;
-  saveAll();
+  try { saveAll(); } catch {}  // best-effort
+
   const toast = document.getElementById('save-toast-pins');
-  if (toast) { toast.style.display='block'; setTimeout(()=>toast.style.display='none',2500); }
+  if (toast) {
+    toast.textContent = `✓ Saved ${Object.keys(pins).length} PINs to Supabase — agents will see change on next login or sync`;
+    toast.style.display = 'block';
+    setTimeout(() => toast.style.display = 'none', 4000);
+  }
+
+  // Re-render to confirm new state
+  setTimeout(() => renderPinForm(), 500);
 }
 
 function showDeployInstructions() {
@@ -2794,6 +2857,41 @@ const GistSync = (() => {
     }
   }
 
+  // ── Paginated GET: fetches ALL rows regardless of Supabase's 1000-row default cap.
+  // Uses PostgREST "Range" header for offset-based paging. Stops when the server
+  // returns fewer rows than requested, or when a safety limit is hit.
+  async function _restAll(path, pageSize) {
+    pageSize = pageSize || 1000;
+    const MAX_PAGES = 50;        // hard safety cap = 50,000 rows
+    const all = [];
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const from = page * pageSize;
+      const to   = from + pageSize - 1;
+      try {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+          method: 'GET',
+          headers: _headers({
+            'Range-Unit': 'items',
+            'Range': `${from}-${to}`,
+            'Prefer': 'count=none'
+          })
+        });
+        if (!r.ok) {
+          console.warn(`[SupabaseSync] paged GET ${path} page ${page} → ${r.status}`);
+          break;
+        }
+        const chunk = await r.json();
+        if (!Array.isArray(chunk) || chunk.length === 0) break;
+        all.push(...chunk);
+        if (chunk.length < pageSize) break;   // last page
+      } catch (e) {
+        console.warn('[SupabaseSync] paged GET error', e);
+        break;
+      }
+    }
+    return { ok:true, data: all };
+  }
+
   // ── Public: always "configured" — no token rotation ──────────────────
   function isConfigured() { return true; }
 
@@ -2828,7 +2926,7 @@ const GistSync = (() => {
 
     if (fileKey.startsWith('claims_')) {
       const month = _monthFromSlug(fileKey.replace('claims_',''));
-      const r = await _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`);
+      const r = await _restAll(`claims?select=*&month=eq.${encodeURIComponent(month)}`);
       if (!r.ok) return null;
       const out = {};
       (r.data||[]).forEach(row => {
@@ -2847,7 +2945,7 @@ const GistSync = (() => {
 
     if (fileKey.startsWith('flags_')) {
       const month = _monthFromSlug(fileKey.replace('flags_',''));
-      const r = await _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`);
+      const r = await _restAll(`flags?select=*&month=eq.${encodeURIComponent(month)}`);
       if (!r.ok) return null;
       const byAgent = {};
       (r.data||[]).forEach(row => {
@@ -2862,7 +2960,7 @@ const GistSync = (() => {
     }
 
     if (fileKey === 'kpi_scores') {
-      const r = await _rest(`kpi_scores?select=*`);
+      const r = await _restAll(`kpi_scores?select=*`);
       if (!r.ok) return null;
       const byMonth = {};
       (r.data||[]).forEach(row => {
@@ -3043,9 +3141,9 @@ const GistSync = (() => {
 
     try {
       const [claimsRes, flagsRes, kpiRes] = await Promise.all([
-        _rest(`claims?select=*&month=eq.${encodeURIComponent(month)}`),
-        _rest(`flags?select=*&month=eq.${encodeURIComponent(month)}`),
-        _rest(`kpi_scores?select=*&month=eq.${encodeURIComponent(month)}`)
+        _restAll(`claims?select=*&month=eq.${encodeURIComponent(month)}`),
+        _restAll(`flags?select=*&month=eq.${encodeURIComponent(month)}`),
+        _restAll(`kpi_scores?select=*&month=eq.${encodeURIComponent(month)}`)
       ]);
 
       if (!claimsRes.ok) return { ok:false, reason:'claims_fetch_failed' };
