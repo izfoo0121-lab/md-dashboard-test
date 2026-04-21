@@ -1404,6 +1404,9 @@ function renderDebtors() {
       const grp = SKU_GRP[filters.brand] || filters.brand;
       const st  = (d.sku_status || {})[grp];
       if (st !== 'lapsed') return false;
+      // Match Excel master convention: exclude Personal from brand penetration counts.
+      // Personal-type debtors (agents' own / family accounts) aren't real penetration targets.
+      if (d.debtor_type === 'P-Personal') return false;
     }
     return true;
   });
