@@ -620,10 +620,11 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <button onclick="bulkMarkDelivered()"
             style="background:#1e5c35;border:1px solid #3ddc84;color:#3ddc84;font-family:var(--mono);font-size:11px;font-weight:700;padding:10px 20px;border-radius:8px;cursor:pointer;">
-            ✓ BULK MARK DELIVERED
+            🔍 PREVIEW BULK MARK
           </button>
           <div id="bulk-result" style="font-family:var(--mono);font-size:10px;color:var(--ink3);"></div>
         </div>
+        <div id="bulk-preview" style="display:none;"></div>
       </div>
 
       <div class="sec-divider">Active Campaigns</div>
@@ -2922,45 +2923,290 @@ function populateBulkCampSelect() {
   });
 }
 
-function bulkMarkDelivered() {
-  const campId   = document.getElementById('bulk-camp-select')?.value;
-  const month    = document.getElementById('bulk-month-select')?.value;
-  const agent    = document.getElementById('bulk-agent-select')?.value;
-  const raw      = document.getElementById('bulk-debtor-codes')?.value || '';
-  const remark   = document.getElementById('bulk-remark')?.value || 'Bulk import';
-  const resultEl = document.getElementById('bulk-result');
+// ═══════════════════════════════════════════════════════════════════════
+// Bulk Mark Delivered — with pre-validation, duplicate check, dry-run
+// ═══════════════════════════════════════════════════════════════════════
 
-  if (!campId) { resultEl.textContent = '⚠ Select a campaign first'; resultEl.style.color = 'var(--red)'; return; }
-  if (!month)  { resultEl.textContent = '⚠ Select a month'; resultEl.style.color = 'var(--red)'; return; }
-  if (!raw.trim()) { resultEl.textContent = '⚠ Paste debtor codes first'; resultEl.style.color = 'var(--red)'; return; }
+// Live list of active (non-archived, non-inactive) agents, excluding JW etc.
+function _activeAgentsForBulk() {
+  const cfgAgents = Object.keys(CONFIG?.agents || {}).filter(a => {
+    const info = CONFIG.agents[a];
+    return !info?.archived && info?.active !== false;
+  });
+  if (cfgAgents.length) return cfgAgents;
+  // Fallback list (matches the original hard-coded set minus JW)
+  return ['BEN','CJ','JACKY','JAMES','KEAN','KEE','KF','KI-MI','KW','LEON','NMK','SAM','YI'];
+}
 
-  // Parse codes — split by newline, comma, semicolon
-  const codes = raw.split(/[\n,;]+/).map(c => c.trim()).filter(Boolean);
-  if (!codes.length) { resultEl.textContent = '⚠ No valid codes found'; return; }
+// Check which debtor codes exist per agent + which are Personal (excluded from KPI)
+function _validateCodes(codes, selectedAgent) {
+  const agents = selectedAgent ? [selectedAgent] : _activeAgentsForBulk();
+  const PERSONAL = new Set(['P-Personal','P-PERSONAL','personal','Personal','PERSONAL']);
+  const valid = [];       // { agent, debtor_code, name, type }
+  const notFound = [];    // codes not matched to any selected agent
+  const personalSkipped = []; // found but Personal type
 
-  const now = new Date();
-  const ts  = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) + ' ' + now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-  const monthSlug = month.replace(' ', '');
+  const codesSet = new Set(codes.map(c => c.trim().toUpperCase()));
 
-  let count = 0;
-  const AGENTS = agent ? [agent] : ['BEN','CJ','JACKY','JAMES','JW','KEAN','KEE','KF','KI-MI','KW','LEON','NMK','SAM','YI'];
-
-  codes.forEach(code => {
-    AGENTS.forEach(ag => {
-      const key = `camp_claim_${monthSlug}_${ag}_${campId}_${code}`;
-      // Only set if not already claimed
-      if (!localStorage.getItem(key)) {
-        localStorage.setItem(key, JSON.stringify({ ts, remark, count: 1, bulk: true }));
-        count++;
+  agents.forEach(agent => {
+    const debtors = DASH_DATA?.agents?.[agent]?.debtor_cards?.debtors || [];
+    debtors.forEach(d => {
+      const code = (d.debtor_code || '').toUpperCase();
+      if (codesSet.has(code)) {
+        if (PERSONAL.has(d.debtor_type)) {
+          personalSkipped.push({ agent, code, name: d.company_name, type: d.debtor_type });
+        } else {
+          valid.push({ agent, code, name: d.company_name, type: d.debtor_type });
+        }
       }
     });
   });
 
-  resultEl.style.color = '#3ddc84';
-  resultEl.textContent = `✓ Marked ${count} entries delivered (${codes.length} codes × ${AGENTS.length} agent${AGENTS.length>1?'s':''})`;
+  const foundCodes = new Set([...valid.map(v=>v.code), ...personalSkipped.map(v=>v.code)]);
+  codes.forEach(code => {
+    if (!foundCodes.has(code.trim().toUpperCase())) notFound.push(code);
+  });
 
-  // Clear textarea
+  return { valid, notFound, personalSkipped };
+}
+
+// Check Supabase: which (month, agent, camp_id, debtor_code) already exist as delivered
+async function _fetchExistingClaims(month, campId, agents, codes) {
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+
+  // Query: all delivered claims for this month+camp where agent IN (...) AND debtor_code IN (...)
+  const agentsFilter = agents.map(a => `"${a}"`).join(',');
+  const codesFilter  = codes.map(c => `"${c.toUpperCase()}"`).join(',');
+  const url = `${SUPABASE_URL}/rest/v1/claims?select=agent,camp_id,debtor_code,status&month=eq.${encodeURIComponent(month)}&agent=in.(${agentsFilter})&debtor_code=in.(${codesFilter})`;
+  try {
+    const r = await fetch(url, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
+    if (!r.ok) return [];
+    return await r.json();
+  } catch(e) {
+    console.warn('[Bulk] Supabase fetch failed:', e);
+    return [];
+  }
+}
+
+// Generate the pre-validation report
+async function previewBulkMark() {
+  const campId = document.getElementById('bulk-camp-select')?.value;
+  const month  = document.getElementById('bulk-month-select')?.value;
+  const agent  = document.getElementById('bulk-agent-select')?.value;
+  const raw    = document.getElementById('bulk-debtor-codes')?.value || '';
+  const resultEl = document.getElementById('bulk-result');
+  const previewEl = document.getElementById('bulk-preview');
+
+  if (!campId) { resultEl.textContent = '⚠ Select a campaign first'; resultEl.style.color = 'var(--red)'; return null; }
+  if (!month)  { resultEl.textContent = '⚠ Select a month'; resultEl.style.color = 'var(--red)'; return null; }
+  if (!raw.trim()) { resultEl.textContent = '⚠ Paste debtor codes first'; resultEl.style.color = 'var(--red)'; return null; }
+
+  const codes = raw.split(/[\n,;]+/).map(c => c.trim()).filter(Boolean);
+  if (!codes.length) { resultEl.textContent = '⚠ No valid codes found'; return null; }
+
+  previewEl.style.display = 'block';
+  previewEl.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--ink3);padding:12px;">🔍 Validating...</div>';
+  resultEl.textContent = '';
+
+  // Step 1: Validate codes against dashboard data (agent-debtor mapping)
+  const { valid, notFound, personalSkipped } = _validateCodes(codes, agent);
+
+  // Step 2: Check Supabase for already-delivered claims
+  const agentsToCheck = [...new Set(valid.map(v => v.agent))];
+  const codesToCheck  = [...new Set(valid.map(v => v.code))];
+
+  let existingClaims = [];
+  if (agentsToCheck.length && codesToCheck.length) {
+    existingClaims = await _fetchExistingClaims(month, campId, agentsToCheck, codesToCheck);
+  }
+
+  // Build lookup: already delivered for THIS camp
+  const alreadyThisCamp = new Set();
+  const alreadyOtherCamp = {};  // code → [camp_id, camp_id, ...]
+  existingClaims.forEach(c => {
+    if (c.status !== 'delivered') return;
+    const key = `${c.agent}|${c.debtor_code.toUpperCase()}`;
+    if (c.camp_id === campId) {
+      alreadyThisCamp.add(key);
+    } else {
+      // If it's also a birthday-family camp, flag it
+      const isBday = /birthday|bday/i.test(c.camp_id);
+      const thisIsBday = /birthday|bday/i.test(campId);
+      if (isBday && thisIsBday) {
+        if (!alreadyOtherCamp[key]) alreadyOtherCamp[key] = [];
+        alreadyOtherCamp[key].push(c.camp_id);
+      }
+    }
+  });
+
+  // Partition valid into: new / duplicate (same camp) / other-camp-warning
+  const toCreate = [];
+  const duplicates = [];
+  const crossCampWarnings = [];
+  valid.forEach(v => {
+    const key = `${v.agent}|${v.code}`;
+    if (alreadyThisCamp.has(key)) {
+      duplicates.push(v);
+    } else if (alreadyOtherCamp[key]) {
+      crossCampWarnings.push({ ...v, otherCamps: alreadyOtherCamp[key] });
+      toCreate.push(v);  // still count as "to create" — user can cancel if needed
+    } else {
+      toCreate.push(v);
+    }
+  });
+
+  // Render preview
+  const campName = (CAMPAIGNS_DATA.campaigns || []).find(c => c.id === campId)?.name || campId;
+  previewEl.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:10px;font-family:var(--mono);font-size:11px;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">🔍 Pre-Validation Report</div>
+
+      <div style="color:var(--ink3);margin-bottom:6px;">Campaign: <strong style="color:var(--ink);">${campName}</strong> (${campId})</div>
+      <div style="color:var(--ink3);margin-bottom:6px;">Month: <strong style="color:var(--ink);">${month}</strong></div>
+      <div style="color:var(--ink3);margin-bottom:12px;">Agent: <strong style="color:var(--ink);">${agent || 'All active agents'}</strong></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div style="padding:8px;background:rgba(61,220,132,.08);border:1px solid rgba(61,220,132,.3);border-radius:8px;">
+          <div style="font-size:18px;color:var(--green,#3ddc84);">${toCreate.length}</div>
+          <div style="font-size:9px;color:var(--muted);">WILL BE CREATED</div>
+        </div>
+        <div style="padding:8px;background:rgba(255,165,0,.08);border:1px solid rgba(255,165,0,.3);border-radius:8px;">
+          <div style="font-size:18px;color:var(--accent,#ffa500);">${duplicates.length}</div>
+          <div style="font-size:9px;color:var(--muted);">ALREADY DELIVERED (SKIP)</div>
+        </div>
+        <div style="padding:8px;background:rgba(255,95,95,.08);border:1px solid rgba(255,95,95,.3);border-radius:8px;">
+          <div style="font-size:18px;color:var(--red,#ff5f5f);">${notFound.length}</div>
+          <div style="font-size:9px;color:var(--muted);">CODE NOT FOUND</div>
+        </div>
+        <div style="padding:8px;background:rgba(150,150,150,.08);border:1px solid var(--border);border-radius:8px;">
+          <div style="font-size:18px;color:var(--muted);">${personalSkipped.length}</div>
+          <div style="font-size:9px;color:var(--muted);">PERSONAL (EXCLUDED)</div>
+        </div>
+      </div>
+
+      ${crossCampWarnings.length ? `
+        <div style="margin-top:10px;padding:8px;background:rgba(255,165,0,.1);border:1px solid rgba(255,165,0,.4);border-radius:8px;">
+          <div style="color:var(--accent,#ffa500);font-weight:700;font-size:11px;margin-bottom:4px;">⚠ ${crossCampWarnings.length} debtors already delivered in ANOTHER birthday campaign</div>
+          <div style="font-size:9px;color:var(--ink3);">These will be DOUBLE-COUNTED if you proceed (both camps → both show as delivered → KPI double-counts):</div>
+          <div style="font-size:10px;color:var(--ink);margin-top:4px;max-height:80px;overflow-y:auto;">
+            ${crossCampWarnings.slice(0, 10).map(w => `• ${w.agent}: ${w.code} (${w.name}) — already in ${w.otherCamps.join(', ')}`).join('<br>')}
+            ${crossCampWarnings.length > 10 ? `<br><em style="color:var(--muted);">...and ${crossCampWarnings.length - 10} more</em>` : ''}
+          </div>
+        </div>` : ''}
+
+      ${notFound.length ? `
+        <div style="margin-top:10px;padding:8px;background:rgba(255,95,95,.06);border:1px solid rgba(255,95,95,.25);border-radius:8px;">
+          <div style="color:var(--red,#ff5f5f);font-size:10px;margin-bottom:4px;">Codes not matched to any agent-debtor pair:</div>
+          <div style="font-size:10px;color:var(--ink);max-height:60px;overflow-y:auto;">${notFound.slice(0, 20).join(', ')}${notFound.length > 20 ? '...' : ''}</div>
+        </div>` : ''}
+
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+        <label style="display:flex;gap:6px;align-items:center;font-size:11px;color:var(--ink3);cursor:pointer;">
+          <input type="checkbox" id="bulk-dryrun" checked>
+          <span>🧪 Dry-run (preview only, don't write to Supabase)</span>
+        </label>
+      </div>
+
+      <div style="margin-top:10px;display:flex;gap:8px;">
+        <button onclick="confirmBulkMark()"
+          style="background:var(--green,#3ddc84);border:none;color:#000;font-family:var(--mono);font-size:11px;font-weight:700;padding:10px 18px;border-radius:8px;cursor:pointer;">
+          ${toCreate.length === 0 ? '⚠ NOTHING TO CREATE' : `✓ CREATE ${toCreate.length} CLAIMS`}
+        </button>
+        <button onclick="document.getElementById('bulk-preview').style.display='none';"
+          style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px;padding:10px 16px;border-radius:8px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    </div>
+  `;
+
+  // Stash the calculated to-create list for confirmBulkMark
+  window._pendingBulkMark = { toCreate, campId, month, remark: document.getElementById('bulk-remark')?.value || 'Bulk import' };
+  return window._pendingBulkMark;
+}
+
+async function confirmBulkMark() {
+  const pending = window._pendingBulkMark;
+  if (!pending || !pending.toCreate.length) {
+    alert('Nothing to create. Click Preview first.');
+    return;
+  }
+
+  const dryRun = document.getElementById('bulk-dryrun')?.checked;
+  const resultEl = document.getElementById('bulk-result');
+
+  if (dryRun) {
+    resultEl.style.color = 'var(--accent, #ffa500)';
+    resultEl.textContent = `🧪 DRY RUN: Would create ${pending.toCreate.length} claims (nothing saved). Uncheck "Dry-run" + click again to save.`;
+    return;
+  }
+
+  // Actually write to Supabase
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const now = new Date();
+  const ts  = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) + ' ' + now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+
+  const rows = pending.toCreate.map(v => ({
+    month: pending.month,
+    agent: v.agent,
+    camp_id: pending.campId,
+    debtor_code: v.code,
+    status: 'delivered',
+    remark: pending.remark,
+    bulk: true,
+    actor: 'admin',
+    ts
+  }));
+
+  resultEl.style.color = 'var(--muted)';
+  resultEl.textContent = `⏳ Saving ${rows.length} claims to Supabase...`;
+
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/claims?on_conflict=month,agent,camp_id,debtor_code`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(rows)
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      resultEl.style.color = 'var(--red)';
+      resultEl.textContent = `✗ Supabase error ${r.status}: ${err.slice(0,200)}`;
+      return;
+    }
+  } catch(e) {
+    resultEl.style.color = 'var(--red)';
+    resultEl.textContent = `✗ Network error: ${e.message}`;
+    return;
+  }
+
+  // Also update localStorage for back-compat (UI readers that still check camp_claim_*)
+  const monthSlug = pending.month.replace(' ', '');
+  rows.forEach(row => {
+    const key = `camp_claim_${monthSlug}_${row.agent}_${row.camp_id}_${row.debtor_code}`;
+    localStorage.setItem(key, JSON.stringify({ ts: row.ts, remark: row.remark, count: 1, bulk: true }));
+  });
+
+  resultEl.style.color = 'var(--green, #3ddc84)';
+  resultEl.textContent = `✓ Created ${rows.length} claims in Supabase (${new Set(rows.map(r=>r.agent)).size} agent${new Set(rows.map(r=>r.agent)).size>1?'s':''}). Don't forget to verify in campaign_audit.html.`;
+
+  // Reset
+  document.getElementById('bulk-preview').style.display = 'none';
   document.getElementById('bulk-debtor-codes').value = '';
+  window._pendingBulkMark = null;
+}
+
+// Old entry point — now runs the preview instead of immediate save
+function bulkMarkDelivered() {
+  previewBulkMark();
 }
 
 function saveCampaignsJSON() {
