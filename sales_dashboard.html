@@ -523,6 +523,8 @@ function logout() {
   // Reset PIN state
   _pin = '';
   _pinLocked = false;
+  // Reset Supabase sync flag so next login re-syncs
+  _claimsSyncedForSession = false;
   // Show gate
   const gate = document.getElementById('pin-gate');
   if (gate) gate.style.display = 'flex';
@@ -846,6 +848,12 @@ let currentView = 'debtors';
 let filters = { status: 'all', special: null, type: 'all', brand: 'all' };
 let currentPage = 1;
 const PAGE_SIZE = 12;
+
+// ── Supabase config (shared across the file) ──────────────────────────────
+const _SUPA_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+const _SUPA_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+// Once synced on login, we set this so subsequent renderAll() calls skip re-sync
+let _claimsSyncedForSession = false;
 
 const BRAND_COLORS = {
   'iFACE':'#4da6ff','SUKUN':'#a78bfa','EVO':'#ff5f5f',
@@ -1253,6 +1261,17 @@ function selectAgent(agent) {
 }
 
 function renderAll() {
+  // Sync agent's claims from Supabase once per session before rendering.
+  // This ensures bulk-imported claims + claims made on other devices are reflected.
+  // Async but fire-and-forget — render proceeds with current localStorage,
+  // and re-renders when sync completes so UI updates if new claims arrived.
+  syncClaimsFromSupabase().then(() => {
+    // After sync, re-render the views that depend on claim state
+    if (_claimsSyncedForSession) {
+      renderDebtors();
+      renderCamps();
+    }
+  });
   renderDebtors();
   renderSalesProgression();
   renderBrandCommission();
@@ -3262,10 +3281,148 @@ function getCampClaims(agent, campId, debtorCode) {
   const key = getCampClaimKey(agent, campId, debtorCode);
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
 }
+
+// ── Supabase claim sync helpers ─────────────────────────────────────────
+// Pull all of THIS agent's claims for current month from Supabase and
+// populate localStorage. Runs once on login so camp tab / birthday tab
+// reflect admin bulk-imports and agent's own device actions.
+async function syncClaimsFromSupabase() {
+  if (!currentAgent || !DATA?.current_month) return;
+  if (_claimsSyncedForSession) return;          // once per session
+  const month = DATA.current_month;              // e.g. "Apr 26"
+  const monthSlug = month.replace(' ', '');
+  try {
+    const url = `${_SUPA_URL}/rest/v1/claims`
+      + `?select=agent,camp_id,debtor_code,status,ts,remark,bulk`
+      + `&month=eq.${encodeURIComponent(month)}`
+      + `&agent=eq.${encodeURIComponent(currentAgent)}`;
+    const r = await fetch(url, {
+      headers: { 'apikey': _SUPA_KEY, 'Authorization': `Bearer ${_SUPA_KEY}`, 'Range': '0-4999' }
+    });
+    if (!r.ok) { console.warn('[SupaSync] fetch failed', r.status); return; }
+    const rows = await r.json();
+    // Track keys we've seen so we can clear stale localStorage entries
+    // for debtors that are no longer claimed in Supabase (admin deletion)
+    const seenCampKeys = new Set();
+    const seenBdayKeys = new Set();
+    rows.forEach(row => {
+      const code = row.debtor_code;
+      // Only treat delivered/verified as "claimed" for the agent UI.
+      // Rejected claims should not show green "Sent" on the phone.
+      const isClaimed = row.status === 'delivered' || row.status === 'verified';
+      if (!isClaimed) return;
+      // Generic camp_claim_ key (for Camps tab + Deliver button)
+      const campKey = `camp_claim_${monthSlug}_${row.agent}_${row.camp_id}_${code}`;
+      seenCampKeys.add(campKey);
+      const existing = localStorage.getItem(campKey);
+      if (!existing) {
+        localStorage.setItem(campKey, JSON.stringify({
+          status: row.status === 'verified' ? 'verified' : 'claimed',
+          ts: row.ts || '',
+          remark: row.remark || '',
+          count: 1,
+          bulk: !!row.bulk
+        }));
+      }
+      // Birthday-specific key (for birthday popup UI)
+      if (row.camp_id === 'birthday_gift_auto' || /birthday|bday/i.test(row.camp_id)) {
+        const bdayKey = `bday_gift_${row.agent}_${code}_${monthSlug}`;
+        seenBdayKeys.add(bdayKey);
+        if (localStorage.getItem(bdayKey) !== '1') {
+          localStorage.setItem(bdayKey, '1');
+        }
+      }
+    });
+    // Clear stale localStorage entries for this agent+month that were
+    // marked delivered locally but no longer exist in Supabase (admin rejected/deleted)
+    const prefix = `camp_claim_${monthSlug}_${currentAgent}_`;
+    Object.keys(localStorage).filter(k => k.startsWith(prefix)).forEach(k => {
+      if (!seenCampKeys.has(k)) localStorage.removeItem(k);
+    });
+    const bdayPrefix = `bday_gift_${currentAgent}_`;
+    Object.keys(localStorage)
+      .filter(k => k.startsWith(bdayPrefix) && k.endsWith('_'+monthSlug))
+      .forEach(k => { if (!seenBdayKeys.has(k)) localStorage.removeItem(k); });
+    _claimsSyncedForSession = true;
+    console.log(`[SupaSync] Synced ${rows.length} claims for ${currentAgent} / ${month}`);
+  } catch(e) {
+    console.warn('[SupaSync] error', e);
+  }
+}
+
+// Write one claim to Supabase (POST with upsert). Called from save handlers.
+// campType is optional metadata — not stored but useful for future debugging.
+async function _supaUpsertClaim(agent, campId, debtorCode, claimData) {
+  if (!DATA?.current_month) return false;
+  const row = {
+    month: DATA.current_month,
+    agent,
+    camp_id: campId,
+    debtor_code: debtorCode,
+    status: 'delivered',
+    remark: claimData?.remark || '',
+    bulk: false,
+    actor: agent,
+    ts: claimData?.ts || new Date().toISOString()
+  };
+  try {
+    const r = await fetch(`${_SUPA_URL}/rest/v1/claims?on_conflict=month,agent,camp_id,debtor_code`, {
+      method: 'POST',
+      headers: {
+        'apikey': _SUPA_KEY,
+        'Authorization': `Bearer ${_SUPA_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(row)
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      console.warn('[SupaSync] upsert failed', r.status, err.slice(0,200));
+      return false;
+    }
+    return true;
+  } catch(e) {
+    console.warn('[SupaSync] network error on upsert', e);
+    return false;
+  }
+}
+
+// Delete one claim from Supabase. Called from remove/undo handlers.
+async function _supaDeleteClaim(agent, campId, debtorCode) {
+  if (!DATA?.current_month) return false;
+  const url = `${_SUPA_URL}/rest/v1/claims`
+    + `?month=eq.${encodeURIComponent(DATA.current_month)}`
+    + `&agent=eq.${encodeURIComponent(agent)}`
+    + `&camp_id=eq.${encodeURIComponent(campId)}`
+    + `&debtor_code=eq.${encodeURIComponent(debtorCode)}`;
+  try {
+    const r = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'apikey': _SUPA_KEY,
+        'Authorization': `Bearer ${_SUPA_KEY}`,
+        'Prefer': 'return=minimal'
+      }
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      console.warn('[SupaSync] delete failed', r.status, err.slice(0,200));
+      return false;
+    }
+    return true;
+  } catch(e) {
+    console.warn('[SupaSync] network error on delete', e);
+    return false;
+  }
+}
+
 function saveCampClaim(agent, campId, debtorCode, claimData) {
   const key = getCampClaimKey(agent, campId, debtorCode);
   localStorage.setItem(key, JSON.stringify(claimData));
-  // Also sync to Gist if configured
+  // Write to Supabase (fire-and-forget — UI already updated locally)
+  _supaUpsertClaim(agent, campId, debtorCode, claimData).catch(()=>{});
+  // Legacy Gist sync — kept for backward compat but no longer required
   if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
     GistSync.saveClaim(DATA?.current_month||'', agent, campId, debtorCode, claimData).catch(()=>{});
   }
@@ -3273,7 +3430,9 @@ function saveCampClaim(agent, campId, debtorCode, claimData) {
 function removeCampClaim(agent, campId, debtorCode) {
   const key = getCampClaimKey(agent, campId, debtorCode);
   localStorage.removeItem(key);
-  // Also remove from Gist if configured
+  // Delete from Supabase
+  _supaDeleteClaim(agent, campId, debtorCode).catch(()=>{});
+  // Legacy Gist
   if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
     GistSync.removeClaim(DATA?.current_month||'', agent, campId, debtorCode).catch(()=>{});
   }
@@ -3440,9 +3599,16 @@ function saveBdayGift(debtorCode, month, sent, btn) {
   if (sent) {
     localStorage.setItem(key, '1');
     localStorage.setItem(noteKey, note);
+    // Sync to Supabase — birthday claims use camp_id='birthday_gift_auto'
+    _supaUpsertClaim(currentAgent, 'birthday_gift_auto', debtorCode, {
+      remark: note,
+      ts: new Date().toISOString()
+    }).catch(()=>{});
   } else {
     localStorage.removeItem(key);
     localStorage.removeItem(noteKey);
+    // Remove from Supabase
+    _supaDeleteClaim(currentAgent, 'birthday_gift_auto', debtorCode).catch(()=>{});
   }
   btn.closest('div[style*=fixed]').remove();
   renderDebtors();
@@ -3563,32 +3729,36 @@ async function saveEventCount() {
 loadData();
 
 // ── Manual Sync Button ─────────────────────────────────────────────
-// Force a fresh pull from Gist (bypass 30s cache) and re-render active tab.
+// Force a fresh pull from Supabase (bypass session cache) and re-render.
 // Triggered by 🔄 Sync button in header. Used when agent suspects admin
-// pushed new claims but cache hasn't refreshed yet.
+// pushed new claims or approved audits but local state hasn't refreshed.
 async function manualSync(btn) {
   const si = document.getElementById('sync-indicator');
-  if (!(typeof GistSync !== 'undefined' && GistSync.isConfigured())) {
-    if (si) { si.textContent = '⚠ Not configured'; si.style.color = 'var(--red)'; }
+  if (!currentAgent || !DATA?.current_month) {
+    if (si) { si.textContent = '⚠ Not ready'; si.style.color = 'var(--red)'; }
     return;
   }
   const origLabel = btn ? btn.textContent : '';
   if (btn) { btn.textContent = '⏳ Syncing…'; btn.disabled = true; }
   if (si)  { si.textContent = 'Pulling…'; si.style.color = 'var(--muted)'; }
   try {
-    const res = await GistSync.syncToLocal(DATA?.current_month || '', { force: true });
-    if (res && res.ok) {
-      if (si) {
-        si.textContent = `✓ Synced ${res.claimCount||0}`;
-        si.style.color = 'var(--green)';
-      }
-      try { if (typeof renderCamps   === 'function') renderCamps();   } catch(e) {}
-      try { if (typeof renderDebtors === 'function') renderDebtors(); } catch(e) {}
-    } else {
-      if (si) { si.textContent = '⚠ Failed'; si.style.color = 'var(--red)'; }
+    // Force re-sync by clearing the session flag
+    _claimsSyncedForSession = false;
+    await syncClaimsFromSupabase();
+    // Count claims synced (from localStorage now)
+    const monthSlug = DATA.current_month.replace(' ', '');
+    const prefix = `camp_claim_${monthSlug}_${currentAgent}_`;
+    const claimCount = Object.keys(localStorage).filter(k => k.startsWith(prefix)).length;
+    if (si) {
+      si.textContent = `✓ Synced ${claimCount}`;
+      si.style.color = 'var(--green)';
     }
+    try { if (typeof renderCamps   === 'function') renderCamps();   } catch(e) {}
+    try { if (typeof renderDebtors === 'function') renderDebtors(); } catch(e) {}
+    try { if (typeof renderKPI     === 'function') renderKPI();     } catch(e) {}
   } catch(e) {
     if (si) { si.textContent = '⚠ Error'; si.style.color = 'var(--red)'; }
+    console.warn('[manualSync]', e);
   } finally {
     if (btn) { btn.textContent = origLabel || '🔄 Sync'; btn.disabled = false; }
   }
