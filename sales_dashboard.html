@@ -1261,17 +1261,6 @@ function selectAgent(agent) {
 }
 
 function renderAll() {
-  // Sync agent's claims from Supabase once per session before rendering.
-  // This ensures bulk-imported claims + claims made on other devices are reflected.
-  // Async but fire-and-forget — render proceeds with current localStorage,
-  // and re-renders when sync completes so UI updates if new claims arrived.
-  syncClaimsFromSupabase().then(() => {
-    // After sync, re-render the views that depend on claim state
-    if (_claimsSyncedForSession) {
-      renderDebtors();
-      renderCamps();
-    }
-  });
   renderDebtors();
   renderSalesProgression();
   renderBrandCommission();
@@ -3282,76 +3271,12 @@ function getCampClaims(agent, campId, debtorCode) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
 }
 
-// ── Supabase claim sync helpers ─────────────────────────────────────────
-// Pull all of THIS agent's claims for current month from Supabase and
-// populate localStorage. Runs once on login so camp tab / birthday tab
-// reflect admin bulk-imports and agent's own device actions.
-async function syncClaimsFromSupabase() {
-  if (!currentAgent || !DATA?.current_month) return;
-  if (_claimsSyncedForSession) return;          // once per session
-  const month = DATA.current_month;              // e.g. "Apr 26"
-  const monthSlug = month.replace(' ', '');
-  try {
-    const url = `${_SUPA_URL}/rest/v1/claims`
-      + `?select=agent,camp_id,debtor_code,status,ts,remark,bulk`
-      + `&month=eq.${encodeURIComponent(month)}`
-      + `&agent=eq.${encodeURIComponent(currentAgent)}`;
-    const r = await fetch(url, {
-      headers: { 'apikey': _SUPA_KEY, 'Authorization': `Bearer ${_SUPA_KEY}`, 'Range': '0-4999' }
-    });
-    if (!r.ok) { console.warn('[SupaSync] fetch failed', r.status); return; }
-    const rows = await r.json();
-    // Track keys we've seen so we can clear stale localStorage entries
-    // for debtors that are no longer claimed in Supabase (admin deletion)
-    const seenCampKeys = new Set();
-    const seenBdayKeys = new Set();
-    rows.forEach(row => {
-      const code = row.debtor_code;
-      // Only treat delivered/verified as "claimed" for the agent UI.
-      // Rejected claims should not show green "Sent" on the phone.
-      const isClaimed = row.status === 'delivered' || row.status === 'verified';
-      if (!isClaimed) return;
-      // Generic camp_claim_ key (for Camps tab + Deliver button)
-      const campKey = `camp_claim_${monthSlug}_${row.agent}_${row.camp_id}_${code}`;
-      seenCampKeys.add(campKey);
-      const existing = localStorage.getItem(campKey);
-      if (!existing) {
-        localStorage.setItem(campKey, JSON.stringify({
-          status: row.status === 'verified' ? 'verified' : 'claimed',
-          ts: row.ts || '',
-          remark: row.remark || '',
-          count: 1,
-          bulk: !!row.bulk
-        }));
-      }
-      // Birthday-specific key (for birthday popup UI)
-      if (row.camp_id === 'birthday_gift_auto' || /birthday|bday/i.test(row.camp_id)) {
-        const bdayKey = `bday_gift_${row.agent}_${code}_${monthSlug}`;
-        seenBdayKeys.add(bdayKey);
-        if (localStorage.getItem(bdayKey) !== '1') {
-          localStorage.setItem(bdayKey, '1');
-        }
-      }
-    });
-    // Clear stale localStorage entries for this agent+month that were
-    // marked delivered locally but no longer exist in Supabase (admin rejected/deleted)
-    const prefix = `camp_claim_${monthSlug}_${currentAgent}_`;
-    Object.keys(localStorage).filter(k => k.startsWith(prefix)).forEach(k => {
-      if (!seenCampKeys.has(k)) localStorage.removeItem(k);
-    });
-    const bdayPrefix = `bday_gift_${currentAgent}_`;
-    Object.keys(localStorage)
-      .filter(k => k.startsWith(bdayPrefix) && k.endsWith('_'+monthSlug))
-      .forEach(k => { if (!seenBdayKeys.has(k)) localStorage.removeItem(k); });
-    _claimsSyncedForSession = true;
-    console.log(`[SupaSync] Synced ${rows.length} claims for ${currentAgent} / ${month}`);
-  } catch(e) {
-    console.warn('[SupaSync] error', e);
-  }
-}
+// ── Supabase claim write helpers ────────────────────────────────────────
+// The existing SupabaseSync module (bottom of file) handles READS/pull.
+// These two helpers handle single-claim WRITES when agents click
+// Mark Sent / Claim / Undo on the phone. They keep Supabase and
+// localStorage in sync on every action.
 
-// Write one claim to Supabase (POST with upsert). Called from save handlers.
-// campType is optional metadata — not stored but useful for future debugging.
 async function _supaUpsertClaim(agent, campId, debtorCode, claimData) {
   if (!DATA?.current_month) return false;
   const row = {
@@ -3378,17 +3303,16 @@ async function _supaUpsertClaim(agent, campId, debtorCode, claimData) {
     });
     if (!r.ok) {
       const err = await r.text();
-      console.warn('[SupaSync] upsert failed', r.status, err.slice(0,200));
+      console.warn('[SupaClaim] upsert failed', r.status, err.slice(0,200));
       return false;
     }
     return true;
   } catch(e) {
-    console.warn('[SupaSync] network error on upsert', e);
+    console.warn('[SupaClaim] network error on upsert', e);
     return false;
   }
 }
 
-// Delete one claim from Supabase. Called from remove/undo handlers.
 async function _supaDeleteClaim(agent, campId, debtorCode) {
   if (!DATA?.current_month) return false;
   const url = `${_SUPA_URL}/rest/v1/claims`
@@ -3407,12 +3331,12 @@ async function _supaDeleteClaim(agent, campId, debtorCode) {
     });
     if (!r.ok) {
       const err = await r.text();
-      console.warn('[SupaSync] delete failed', r.status, err.slice(0,200));
+      console.warn('[SupaClaim] delete failed', r.status, err.slice(0,200));
       return false;
     }
     return true;
   } catch(e) {
-    console.warn('[SupaSync] network error on delete', e);
+    console.warn('[SupaClaim] network error on delete', e);
     return false;
   }
 }
@@ -4133,9 +4057,24 @@ const GistSync = (() => {
           status : row.status || 'delivered',
           actor  : row.actor || 'agent'
         };
-        localStorage.setItem(lsKey, JSON.stringify(val));
-        claimsObj[compKey] = val;
-        claimCount++;
+        // Only mark as delivered/verified in localStorage — NOT rejected ones
+        if (row.status === 'delivered' || row.status === 'verified') {
+          localStorage.setItem(lsKey, JSON.stringify(val));
+          claimsObj[compKey] = val;
+          claimCount++;
+          // ALSO populate the birthday-popup-specific key when applicable
+          // (birthday_gift_auto + any camp_id matching birthday/bday pattern)
+          if (row.camp_id === 'birthday_gift_auto' || /birthday|bday/i.test(row.camp_id)) {
+            const bdayKey = `bday_gift_${row.agent}_${row.debtor_code}_${slug}`;
+            localStorage.setItem(bdayKey, '1');
+          }
+        } else if (row.status === 'rejected') {
+          // Rejected: remove from localStorage if previously set
+          localStorage.removeItem(lsKey);
+          if (row.camp_id === 'birthday_gift_auto' || /birthday|bday/i.test(row.camp_id)) {
+            localStorage.removeItem(`bday_gift_${row.agent}_${row.debtor_code}_${slug}`);
+          }
+        }
       });
 
       // Flags per agent
