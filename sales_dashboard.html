@@ -2574,12 +2574,12 @@ async function applyKPIOverrides() {
     }
   } catch (e) { console.warn('[KPI] kpi_manual fetch failed:', e); }
 
-  // ── 2. Fetch birthday claims + audit for this agent+month ────────
-  // Birthday KPI actual = count of (submitted delivered claims) excluding rejected ones
-  // Verified = delivered AND audit.status = 'verified'
-  // Submitted = delivered AND audit.status != 'rejected' (includes pending + verified)
+  // ── 2. Fetch birthday claims for this agent+month ────────────────
+  // Birthday KPI actual = count of claims with status='verified' for birthday camps
+  // Submitted = delivered + verified (anything not rejected)
+  // This uses the claims.status field directly — no separate audit_log needed
+  // (campaign_audit.html writes status='verified' directly into the claims table).
   try {
-    // a) Fetch all delivered birthday claims
     const claimsUrl = `${SUPABASE_URL}/rest/v1/claims?select=camp_id,debtor_code,status&month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(currentAgent)}`;
     const cr = await fetch(claimsUrl, { headers: baseHeaders });
     const claims = cr.ok ? await cr.json() : [];
@@ -2588,33 +2588,13 @@ async function applyKPIOverrides() {
       const s = String(campId || '').toLowerCase();
       return s.includes('birthday') || s.includes('bday');
     };
-    const deliveredBday = claims.filter(c => isBirthday(c.camp_id) && c.status === 'delivered');
+    const bdayClaims = claims.filter(c => isBirthday(c.camp_id));
 
-    // b) Fetch audit status for these claims
-    const auditUrl = `${SUPABASE_URL}/rest/v1/audit_log?select=month,agent,details&month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(currentAgent)}`;
-    const ar = await fetch(auditUrl, { headers: baseHeaders });
-    const auditRows = ar.ok ? await ar.json() : [];
-    // Build lookup: { `${campId}_${debtorCode}`: 'verified' | 'rejected' }
-    const auditMap = {};
-    auditRows.forEach(row => {
-      try {
-        const d = typeof row.details === 'string' ? JSON.parse(row.details) : (row.details || {});
-        const campId = d.camp_id || d.campId;
-        const dcode  = d.debtor_code || d.debtorCode;
-        if (campId && dcode && d.status) {
-          auditMap[`${campId}_${dcode}`] = d.status;
-        }
-      } catch {}
-    });
-
-    // c) Count verified vs submitted
     let verified = 0, submitted = 0;
-    deliveredBday.forEach(c => {
-      const key = `${c.camp_id}_${c.debtor_code}`;
-      const auditStatus = auditMap[key];
-      if (auditStatus === 'rejected') return;  // rejected doesn't count in either
-      submitted++;
-      if (auditStatus === 'verified') verified++;
+    bdayClaims.forEach(c => {
+      if (c.status === 'rejected') return;       // rejected doesn't count
+      submitted++;                                 // delivered + verified both count as "submitted"
+      if (c.status === 'verified') verified++;
     });
 
     if (items.birthday_campaign) {
