@@ -641,10 +641,14 @@ def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None):
                 except Exception:
                     continue
 
-        # Account bonus tier (global)
+        # Account bonus tier — per-agent override with global fallback
+        # If agent has "newbie_account_tiers" set, use that; else use global account_tiers
+        agent_acc_tiers = ag_info.get("newbie_account_tiers")
+        use_tiers = agent_acc_tiers if agent_acc_tiers else account_tiers
+
         acc_tier_hit = None
         acc_reward   = 0
-        for tier in sorted(account_tiers, key=lambda x: x["count"]):
+        for tier in sorted(use_tiers, key=lambda x: x["count"]):
             if new_acc_count >= tier["count"]:
                 acc_tier_hit = tier["count"]
                 acc_reward   = tier["reward"]
@@ -657,7 +661,8 @@ def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None):
             "ctn_reward":      ctn_reward,
             "new_accounts":    new_acc_count,
             "new_account_codes": new_acc_codes,  # NEW: list of which debtor codes counted
-            "account_tiers":   account_tiers,   # global tiers
+            "account_tiers":   use_tiers,       # per-agent or global (effective)
+            "account_tiers_custom": bool(agent_acc_tiers),  # flag: is override active?
             "acc_tier_hit":    acc_tier_hit,
             "acc_reward":      acc_reward,
             "total_incentive": ctn_reward + acc_reward,

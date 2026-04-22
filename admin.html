@@ -1587,9 +1587,19 @@ function renderNewbieForms() {
       // Ensure 3 tiers
       while (tiers.length < 3) tiers.push({threshold: 0, reward: 0});
 
+      // Per-agent account tiers (override). If not set, shows global values as placeholder.
+      const hasCustomAcc = Array.isArray(adata.newbie_account_tiers) && adata.newbie_account_tiers.length > 0;
+      const accTiersEffective = hasCustomAcc ? adata.newbie_account_tiers : (accTiers.length ? accTiers : [
+        {count:2, reward:200},{count:4, reward:600},{count:6, reward:800}
+      ]);
+      while (accTiersEffective.length < 3) accTiersEffective.push({count:0, reward:0});
+
       return `<div class="admin-card" style="margin-bottom:12px;border-left:4px solid #c8381a;">
         <div style="font-family:var(--display);font-size:20px;letter-spacing:.05em;margin-bottom:10px;">${agent}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+
+        <!-- CTN Tiers -->
+        <div style="font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:6px;">CTN Tiers</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
           ${tiers.slice(0,3).map((t,i) => `
           <div style="background:var(--bg);border-radius:8px;padding:10px;">
             <div style="font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:6px;">Tier ${i+1}</div>
@@ -1604,6 +1614,35 @@ function renderNewbieForms() {
                 onchange="setAgentNBTier('${agent}',${i},'reward',this.value)" style="font-size:13px;">
             </div>
           </div>`).join('')}
+        </div>
+
+        <!-- Account Tiers (override toggle) -->
+        <div style="border-top:1px solid rgba(0,0,0,.08);padding-top:10px;">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#555;margin-bottom:8px;cursor:pointer;">
+            <input type="checkbox" ${hasCustomAcc ? 'checked' : ''}
+              onchange="toggleAgentAccOverride('${agent}', this.checked)"
+              style="width:16px;height:16px;cursor:pointer;">
+            Override New Account Bonus Tiers for ${agent}
+            <span style="color:#888;font-size:9px;margin-left:auto;">${hasCustomAcc ? '(custom)' : '(uses global defaults)'}</span>
+          </label>
+          <div style="display:${hasCustomAcc ? 'grid' : 'none'};grid-template-columns:1fr 1fr 1fr;gap:8px;opacity:${hasCustomAcc ? '1' : '0.5'};" id="acc-tiers-${agent}">
+            ${accTiersEffective.slice(0,3).map((t,i) => `
+            <div style="background:var(--bg);border-radius:8px;padding:10px;">
+              <div style="font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:6px;">Tier ${i+1}</div>
+              <div class="input-group">
+                <div class="input-label">Accounts Needed</div>
+                <input type="number" min="0" placeholder="0" value="${t.count||''}"
+                  onchange="setAgentAccTier('${agent}',${i},'count',this.value)" style="font-size:13px;"
+                  ${hasCustomAcc ? '' : 'disabled'}>
+              </div>
+              <div class="input-group" style="margin-top:6px;">
+                <div class="input-label">Bonus (RM)</div>
+                <input type="number" min="0" placeholder="0" value="${t.reward||''}"
+                  onchange="setAgentAccTier('${agent}',${i},'reward',this.value)" style="font-size:13px;"
+                  ${hasCustomAcc ? '' : 'disabled'}>
+              </div>
+            </div>`).join('')}
+          </div>
         </div>
       </div>`;
     }).join('');
@@ -1634,6 +1673,40 @@ function setAgentNBTier(agent, tierIdx, field, val) {
     ];
   }
   CONFIG.agents[agent].newbie_tiers[tierIdx][field] = parseFloat(val) || 0;
+  updateRawJSON();
+}
+
+// Per-agent account tier override — checkbox toggle
+function toggleAgentAccOverride(agent, checked) {
+  if (!CONFIG.agents[agent]) return;
+  if (checked) {
+    // Initialize from current global or defaults
+    const global = (CONFIG.newbie_scheme?.account_tiers || []).slice();
+    const defaultTiers = [
+      {count:2, reward:200},
+      {count:4, reward:600},
+      {count:6, reward:800},
+    ];
+    const src = global.length ? global : defaultTiers;
+    CONFIG.agents[agent].newbie_account_tiers = src.map(t => ({count: t.count, reward: t.reward}));
+  } else {
+    // Remove override — falls back to global
+    delete CONFIG.agents[agent].newbie_account_tiers;
+  }
+  renderNewbieForms();
+  updateRawJSON();
+}
+
+// Per-agent account tier value change
+function setAgentAccTier(agent, tierIdx, field, val) {
+  if (!CONFIG.agents[agent].newbie_account_tiers) {
+    CONFIG.agents[agent].newbie_account_tiers = [
+      {count:2, reward:200},
+      {count:4, reward:600},
+      {count:6, reward:800},
+    ];
+  }
+  CONFIG.agents[agent].newbie_account_tiers[tierIdx][field] = parseFloat(val) || 0;
   updateRawJSON();
 }
 function setNBCTN(i, field, val) {
