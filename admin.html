@@ -180,7 +180,19 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
     <button class="tab-btn" onclick="switchTab('kpi_manual',this)">📊 KPI Manual</button>
     <button class="tab-btn" onclick="switchTab('pins',this)">🔑 Agent PINs</button>
     <button class="tab-btn" onclick="switchTab('sync',this)">☁️ Cloud Sync</button>
+    <button class="tab-btn" onclick="switchTab('archive',this)">📸 Monthly Archive</button>
     <button class="tab-btn" onclick="switchTab('export',this)">Export / Import</button>
+  </div>
+
+  <!-- Phase C: Save status bar (visible on all tabs) -->
+  <div style="position:sticky;top:0;z-index:100;padding:8px 16px;background:#fafafa;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    <div id="save-status-bar" style="flex:1;min-width:200px;padding:6px 12px;border-radius:6px;color:white;font-family:monospace;font-size:12px;background:#888;">
+      ⚪ Not saved yet this session
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-family:monospace;font-size:11px;color:#555;cursor:pointer;white-space:nowrap;">
+      <input type="checkbox" id="auto-backup-check" style="width:14px;height:14px;cursor:pointer;">
+      Also download backup on save
+    </label>
   </div>
 
   <!-- ── Tab 1: Agent Targets ── -->
@@ -794,6 +806,39 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
     </div>
   </div>
 
+  <!-- ── Tab: Monthly Archive ── -->
+  <div id="tab-archive" class="tab-content">
+    <div class="page-body">
+      <div class="sec-header">📸 Monthly Archive</div>
+      <div class="sec-sub">Capture end-of-month results (KPI, commissions, brand performance) per agent. Used for historical reviews.</div>
+
+      <div class="admin-card" style="margin-bottom:16px;">
+        <div style="font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#555;margin-bottom:10px;">Archive Current Dashboard</div>
+        <div style="font-size:13px;color:#666;margin-bottom:12px;">
+          Archives the current dashboard state to Supabase. Use this at end of month or anytime you want to snapshot today's numbers.
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <select id="archive-month-select" style="font-family:var(--mono);font-size:13px;padding:8px 10px;border:1px solid #ccc;border-radius:6px;">
+            <option value="">Loading months...</option>
+          </select>
+          <button class="save-btn" onclick="archiveSelectedMonth()" style="background:#2a7a4b;">📸 Archive Selected Month</button>
+          <button class="save-btn" onclick="refreshArchiveList()" style="background:#666;">🔄 Refresh List</button>
+        </div>
+        <div id="archive-status" style="margin-top:10px;font-family:var(--mono);font-size:11px;color:#666;"></div>
+      </div>
+
+      <div class="admin-card">
+        <div style="font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#555;margin-bottom:10px;">Archived Months</div>
+        <div style="font-size:13px;color:#666;margin-bottom:12px;">
+          Months already archived in Supabase. Click "Re-archive" to update with current numbers.
+        </div>
+        <div id="archive-list" style="font-family:var(--mono);font-size:12px;">
+          <div style="color:#888;padding:12px;">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Tab 4: Export / Import ── -->
   <div id="tab-export" class="tab-content">
     <div class="page-body">
@@ -1211,11 +1256,16 @@ async function forcePush() {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function initAdmin() {
-  try {
-    const r = await fetch('targets.json?v='+Date.now());
-    CONFIG = await r.json();
-  } catch(e) {
-    CONFIG = buildDefaultConfig();
+  // Phase C: Load targets from Supabase first (source of truth), file as fallback.
+  CONFIG = await loadConfigFromSupabase();
+  if (!CONFIG || !CONFIG.agents || !Object.keys(CONFIG.agents).length) {
+    console.warn('Supabase load empty, falling back to targets.json');
+    try {
+      const r = await fetch('targets.json?v='+Date.now());
+      CONFIG = await r.json();
+    } catch(e) {
+      CONFIG = buildDefaultConfig();
+    }
   }
   // Load dashboard data for non-buyer stats
   try {
@@ -1284,6 +1334,7 @@ function switchTab(tab, el) {
   el.classList.add('active');
   if (tab === 'pins') renderPinForm();
   if (tab === 'kpi_manual') loadKpiManual();
+  if (tab === 'archive') refreshArchiveList();
   if (tab === 'sync') {
     const cfg = typeof GistSync !== 'undefined' ? GistSync.getConfig() : {};
     if (cfg.token) document.getElementById('gist-token-input').value = cfg.token;
@@ -1720,6 +1771,196 @@ function setNBAcc(i, field, val) {
   updateRawJSON();
 }
 
+// ── Monthly Archive ────────────────────────────────────────────────────────
+async function loadArchiveMonths() {
+  // Populate month dropdown from months_index.json
+  try {
+    const r = await fetch('months_index.json?t=' + Date.now(), {cache: 'no-store'});
+    if (!r.ok) throw new Error('months_index.json not found');
+    const months = await r.json();
+    const sel = document.getElementById('archive-month-select');
+    sel.innerHTML = '';
+    // Most recent first
+    months.slice().reverse().forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    document.getElementById('archive-month-select').innerHTML = '<option value="">No months available</option>';
+  }
+}
+
+async function archiveSelectedMonth() {
+  const month = document.getElementById('archive-month-select').value;
+  const status = document.getElementById('archive-status');
+  if (!month) {
+    status.innerHTML = '<span style="color:#c8381a;">⚠ Please select a month first</span>';
+    return;
+  }
+
+  status.innerHTML = `<span style="color:#666;">Archiving ${month}...</span>`;
+
+  // Load the monthly data file
+  const slug = month.replace(' ', '').toLowerCase();
+  let data;
+  try {
+    const r = await fetch(`data_${slug}.json?t=` + Date.now(), {cache: 'no-store'});
+    if (!r.ok) {
+      // Fallback to dashboard_data.json
+      const r2 = await fetch(`dashboard_data.json?t=` + Date.now(), {cache: 'no-store'});
+      if (!r2.ok) throw new Error('Neither data file available');
+      data = await r2.json();
+      const actualMonth = data?.meta?.current_month || data?.current_month;
+      if (actualMonth !== month) {
+        status.innerHTML = `<span style="color:#c8381a;">⚠ Dashboard shows ${actualMonth}, not ${month}. Cannot archive.</span>`;
+        return;
+      }
+    } else {
+      data = await r.json();
+    }
+  } catch (e) {
+    status.innerHTML = `<span style="color:#c8381a;">❌ Failed to load data: ${e.message}</span>`;
+    return;
+  }
+
+  // Extract per-agent archive rows
+  const agents = data.agents || {};
+  const rows = Object.entries(agents).map(([agent, adata]) => extractArchiveRow(agent, adata, month));
+
+  if (!rows.length) {
+    status.innerHTML = '<span style="color:#c8381a;">❌ No agents found in data</span>';
+    return;
+  }
+
+  // Upsert to Supabase
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_monthly_archive?on_conflict=month,agent`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(rows),
+    });
+    if (!r.ok) throw new Error(await r.text());
+
+    const totalComm = rows.reduce((a, b) => a + (b.comm_total || 0), 0);
+    status.innerHTML = `<span style="color:#2a7a4b;">✅ Archived ${rows.length} agents for ${month} (RM ${totalComm.toFixed(2)} total)</span>`;
+    renderArchiveList();  // refresh the list below
+  } catch (e) {
+    status.innerHTML = `<span style="color:#c8381a;">❌ Archive failed: ${e.message}</span>`;
+  }
+}
+
+function extractArchiveRow(agent, adata, month) {
+  const sp = adata.sales_progression || {};
+  const bc = adata.brand_commission || {};
+  const nb = adata.newbie_scheme || {};
+  const kpi = adata.kpi || {};
+
+  const commNormal = parseFloat(sp.reward) || 0;
+  const commBrand = Object.values(bc).reduce((a, b) => a + (parseFloat(b?.comm_earned) || 0), 0);
+  const commNewbieCtn = parseFloat(nb.ctn_reward) || 0;
+  const commNewbieAcc = parseFloat(nb.acc_reward) || 0;
+  const commCampaigns = (adata.campaigns || []).reduce((a, c) => a + (parseFloat(c.approved_reward) || 0), 0);
+  const commTotal = commNormal + commBrand + commNewbieCtn + commNewbieAcc + commCampaigns;
+
+  const brandPerf = {};
+  Object.entries(bc).forEach(([brand, b]) => {
+    if (!b) return;
+    brandPerf[brand] = {
+      pen: b.penetration?.count || 0,
+      pen_target: b.penetration?.target || 0,
+      ctn: b.ctn?.sold || 0,
+      ctn_target: b.ctn?.target || 0,
+      status: b.status || 'none_hit',
+      comm: parseFloat(b.comm_earned) || 0,
+    };
+  });
+
+  return {
+    month: month,
+    agent: agent,
+    total_ctn_paid: parseFloat(sp.ctn_total) || parseFloat(nb.normal_ctn) || 0,
+    total_ctn_invoice: parseFloat(adata.total_ctn_invoice) || parseFloat(sp.ctn_total) || 0,
+    active_debtors: parseInt(adata.active_debtor_count) || 0,
+    new_accounts: parseInt(nb.new_accounts) || 0,
+    comm_normal: commNormal,
+    comm_brand: commBrand,
+    comm_newbie_ctn: commNewbieCtn,
+    comm_newbie_acc: commNewbieAcc,
+    comm_campaigns: commCampaigns,
+    comm_total: commTotal,
+    kpi1_score: parseFloat(kpi.kpi1_score || kpi.score) || 0,
+    kpi2_score: parseFloat(kpi.kpi2_score) || 0,
+    kpi_details: kpi,
+    brand_performance: brandPerf,
+    sales_tier: sp.tier_hit || '',
+    sales_tier_ctn: parseFloat(sp.tier_ctn) || 0,
+    captured_at: new Date().toISOString(),
+    captured_method: 'manual',
+    captured_by: 'admin',
+  };
+}
+
+async function renderArchiveList() {
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const list = document.getElementById('archive-list');
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_monthly_archive?select=month,agent,comm_total,captured_at,captured_method&order=month.desc,agent.asc`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY },
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    // Group by month
+    const byMonth = {};
+    data.forEach(row => {
+      if (!byMonth[row.month]) byMonth[row.month] = {agents: 0, total: 0, latest: null, method: row.captured_method};
+      byMonth[row.month].agents += 1;
+      byMonth[row.month].total += parseFloat(row.comm_total) || 0;
+      if (!byMonth[row.month].latest || row.captured_at > byMonth[row.month].latest) {
+        byMonth[row.month].latest = row.captured_at;
+      }
+    });
+
+    const months = Object.keys(byMonth).sort().reverse();
+    if (!months.length) {
+      list.innerHTML = '<div style="color:#888;padding:12px;">No archives yet. Click "Archive Selected Month" above to create your first.</div>';
+      return;
+    }
+
+    list.innerHTML = months.map(m => {
+      const s = byMonth[m];
+      const date = new Date(s.latest).toLocaleString('en-MY');
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid rgba(0,0,0,.08);">
+        <div>
+          <div style="font-weight:bold;font-size:14px;">${m}</div>
+          <div style="font-size:10px;color:#888;">${s.agents} agents · archived ${date} (${s.method})</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:bold;color:#2a7a4b;">RM ${s.total.toFixed(2)}</div>
+          <div style="font-size:10px;color:#888;">total commission</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = `<div style="color:#c8381a;padding:12px;">Failed to load archive list: ${e.message}</div>`;
+  }
+}
+
+function refreshArchiveList() {
+  loadArchiveMonths();
+  renderArchiveList();
+}
+
 // ── SKU Forms ──────────────────────────────────────────────────────────────
 function renderSKUForms() {
   const bc = CONFIG.brand_config || {};
@@ -1932,16 +2173,225 @@ ${months.filter(m=>m!==current).join(' / ')}`);
 }
 
 // ── Save / Export / Import ─────────────────────────────────────────────────
-function saveAll() {
+// Phase C: saveAll now writes to Supabase (primary), file backup is user-toggled.
+
+async function saveAll() {
   updateRawJSON();
-  // In production (Streamlit), this triggers a POST to save targets.json
-  // For now: download the file
-  exportJSON();
-  // Show toast on all visible tabs
+  updateSaveStatus('saving');
+
+  // Visual feedback: show "saving" state
+  const saveBtns = document.querySelectorAll('.save-btn');
+  saveBtns.forEach(b => { b._origText = b.textContent; b.textContent = 'SAVING...'; b.disabled = true; });
+
+  let success = false;
+  let errorMsg = '';
+  try {
+    await saveAllToSupabase();
+    success = true;
+  } catch (e) {
+    errorMsg = e.message || String(e);
+    console.error('Supabase save failed:', e);
+  }
+
+  // Restore buttons
+  saveBtns.forEach(b => { b.textContent = b._origText || 'SAVE'; b.disabled = false; });
+
+  if (success) {
+    // Update status bar
+    LAST_SAVED_AT = new Date();
+    SAVE_STATE = 'success';
+    updateSaveStatus('success');
+
+    // User opt-in: download file backup
+    const wantBackup = document.getElementById('auto-backup-check');
+    if (wantBackup && wantBackup.checked) {
+      exportJSON();
+    }
+  } else {
+    SAVE_STATE = 'error';
+    updateSaveStatus('error', errorMsg);
+    // ALWAYS download backup on failure (so user doesn't lose work)
+    exportJSON();
+  }
+
+  // Legacy toast elements (keep for backward compat with existing SAVE toasts per-tab)
   document.querySelectorAll('.save-toast').forEach(t => {
     t.style.display = 'block';
     setTimeout(() => t.style.display = 'none', 3000);
   });
+}
+
+// ── Save Status Bar ──────────────────────────────────────────────────────
+let LAST_SAVED_AT = null;
+let SAVE_STATE = 'unknown';  // 'unknown' | 'saving' | 'success' | 'error'
+let SAVE_STATUS_TIMER = null;
+
+function updateSaveStatus(state, errorMsg) {
+  const bar = document.getElementById('save-status-bar');
+  if (!bar) return;
+
+  let txt = '', bg = '#888';
+  if (state === 'saving') {
+    txt = '⏳ Saving to Supabase...';
+    bg = '#4b6eaf';
+  } else if (state === 'success') {
+    txt = '✅ Last saved: just now';
+    bg = '#2a7a4b';
+  } else if (state === 'error') {
+    txt = '❌ Save failed: ' + (errorMsg || 'unknown error') + ' — file backup downloaded';
+    bg = '#c8381a';
+  } else {
+    // Recalculate "X min ago" display
+    if (LAST_SAVED_AT) {
+      const min = Math.floor((Date.now() - LAST_SAVED_AT.getTime()) / 60000);
+      if (min < 1) txt = '✅ Last saved: just now';
+      else if (min === 1) txt = '✅ Last saved: 1 min ago';
+      else if (min < 60) txt = `✅ Last saved: ${min} min ago`;
+      else txt = `✅ Last saved: ${Math.floor(min/60)}h ${min%60}m ago`;
+      bg = '#2a7a4b';
+    } else {
+      txt = '⚪ Not saved yet this session';
+      bg = '#888';
+    }
+  }
+  bar.textContent = txt;
+  bar.style.background = bg;
+}
+
+// Keep status bar refreshed every 30 sec to update "X min ago"
+setInterval(() => {
+  if (SAVE_STATE === 'success' && LAST_SAVED_AT) updateSaveStatus();
+}, 30000);
+
+// Saves all 7 target sections to Supabase tables.
+async function saveAllToSupabase() {
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const headers = {
+    'apikey': SUPABASE_KEY,
+    'Authorization': 'Bearer ' + SUPABASE_KEY,
+    'Content-Type': 'application/json',
+    'Prefer': 'resolution=merge-duplicates',
+  };
+
+  const upsert = async (table, rows, conflict) => {
+    if (!rows || !rows.length) return;
+    const url = `${SUPABASE_URL}/rest/v1/${table}?on_conflict=${conflict}`;
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(rows) });
+    if (!r.ok) throw new Error(`${table}: ${await r.text()}`);
+  };
+
+  // ── 1. AGENTS ─────────────────────────────────────────
+  const agents = CONFIG.agents || {};
+  const agentRows = Object.entries(agents).map(([agent, cfg]) => ({
+    agent,
+    is_newbie: !!cfg.is_newbie,
+    active: cfg.active !== false,
+    is_new_this_month: !!cfg.is_new_this_month,
+    sales_progression: cfg.sales_progression || null,
+    brand_commission: cfg.brand_commission || null,
+    kpi_targets: cfg.kpi_targets || null,
+    kpi_auto_base: cfg.kpi_auto_base || null,
+    newbie_tiers: cfg.newbie_tiers || null,
+    newbie_account_tiers: cfg.newbie_account_tiers || null,
+    updated_by: 'admin.html',
+  }));
+  await upsert('targets_agents', agentRows, 'agent');
+
+  // ── 2. MONTHLY TARGETS ────────────────────────────────
+  const monthly = CONFIG.monthly_targets || {};
+  const monthlyRows = [];
+  Object.entries(monthly).forEach(([month, monthAgents]) => {
+    Object.entries(monthAgents || {}).forEach(([agent, cfg]) => {
+      monthlyRows.push({
+        month, agent,
+        is_newbie: !!cfg.is_newbie,
+        active: cfg.active !== false,
+        sales_progression: cfg.sales_progression || null,
+        brand_commission: cfg.brand_commission || null,
+        kpi_targets: cfg.kpi_targets || null,
+        kpi_overrides: cfg.kpi_overrides || null,
+        updated_by: 'admin.html',
+      });
+    });
+  });
+  // Batch of 100
+  for (let i = 0; i < monthlyRows.length; i += 100) {
+    await upsert('targets_monthly', monthlyRows.slice(i, i + 100), 'month,agent');
+  }
+
+  // ── 3. AGENT PINS ─────────────────────────────────────
+  const pins = CONFIG.agent_pins || {};
+  const pinRows = Object.entries(pins).map(([agent, pin]) => ({
+    agent, pin: String(pin),
+  }));
+  await upsert('targets_pins', pinRows, 'agent');
+
+  // ── 4. BIRTHDAY OVERRIDES ─────────────────────────────
+  const bday = CONFIG.birthday_overrides || {};
+  const bdayRows = Object.entries(bday).map(([code, info]) => {
+    if (typeof info === 'object' && info !== null) {
+      return {
+        debtor_code: code,
+        birth_date: info.birth_date || info.date || '',
+        birth_month: info.birth_month || info.month || null,
+      };
+    }
+    return { debtor_code: code, birth_date: String(info || '') };
+  });
+  await upsert('targets_birthday_overrides', bdayRows, 'debtor_code');
+
+  // ── 5. GROUP BRAND TARGETS ────────────────────────────
+  const gbt = CONFIG.group_brand_targets || {};
+  const gbtRows = Object.entries(gbt).map(([brand, tgt]) => ({
+    brand, target_ctn: parseFloat(tgt) || 0,
+  }));
+  await upsert('targets_group_brand', gbtRows, 'brand');
+
+  // ── 6. STATIC CONFIG (JSON blobs) ─────────────────────
+  const staticKeys = ['brand_config', 'group_brand_config', 'inhouse_codes',
+                      'kpi_weights', 'newbie_scheme'];
+  const staticRows = [];
+  staticKeys.forEach(key => {
+    if (CONFIG[key] !== undefined) {
+      staticRows.push({ key, value: CONFIG[key] });
+    }
+  });
+  await upsert('targets_static', staticRows, 'key');
+
+  // ── 7. SNAPSHOTS (if admin ever edits them — rare) ────
+  // Snapshots are auto-generated by process_data.py, usually not edited via admin
+  // but sync anyway to keep DB consistent
+  const monthlySnaps = CONFIG.monthly_snapshots || {};
+  const penSnaps = CONFIG.penetration_snapshots || {};
+  const snapRows = [
+    ...Object.entries(monthlySnaps).map(([m, v]) => ({ kind: 'monthly', month: m, value: v })),
+    ...Object.entries(penSnaps).map(([m, v]) => ({ kind: 'penetration', month: m, value: v })),
+  ];
+  if (snapRows.length) {
+    await upsert('targets_snapshots', snapRows, 'kind,month');
+  }
+}
+
+// Toast notification (single non-intrusive feedback element)
+function showToast(msg, type) {
+  const bg = type === 'success' ? '#2a7a4b' : (type === 'error' ? '#c8381a' : '#333');
+  let toast = document.getElementById('__supabase_toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = '__supabase_toast';
+    toast.style.cssText = `
+      position:fixed;bottom:30px;left:50%;transform:translateX(-50%);
+      color:white;padding:12px 24px;border-radius:8px;font-family:sans-serif;
+      font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.2);z-index:9999;
+      opacity:0;transition:opacity 0.3s;max-width:80%;text-align:center;`;
+    document.body.appendChild(toast);
+  }
+  toast.style.background = bg;
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, 4000);
 }
 
 function exportJSON() {
@@ -1950,6 +2400,95 @@ function exportJSON() {
   a.href = URL.createObjectURL(blob);
   a.download = 'targets.json';
   a.click();
+}
+
+// Phase C: Load targets from Supabase into CONFIG.
+// Assembles all 7 tables into targets.json-shape object.
+async function loadConfigFromSupabase() {
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const headers = { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY };
+
+  const fetchTable = async (table) => {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*`, { headers });
+    if (!r.ok) throw new Error(`${table}: ${r.status}`);
+    return await r.json();
+  };
+
+  try {
+    const [agents, monthly, pins, bday, gbt, staticRows, snaps] = await Promise.all([
+      fetchTable('targets_agents'),
+      fetchTable('targets_monthly'),
+      fetchTable('targets_pins'),
+      fetchTable('targets_birthday_overrides'),
+      fetchTable('targets_group_brand'),
+      fetchTable('targets_static'),
+      fetchTable('targets_snapshots'),
+    ]);
+
+    // Assemble into targets.json-shape
+    const cfg = {
+      _comment: 'MD Sales Dashboard — loaded from Supabase',
+      _loaded_at: new Date().toISOString(),
+    };
+
+    // 1. Agents
+    cfg.agents = {};
+    agents.forEach(r => {
+      const c = { is_newbie: r.is_newbie, active: r.active, is_new_this_month: r.is_new_this_month };
+      ['sales_progression', 'brand_commission', 'kpi_targets', 'kpi_auto_base',
+       'newbie_tiers', 'newbie_account_tiers'].forEach(k => {
+        if (r[k] !== null && r[k] !== undefined) c[k] = r[k];
+      });
+      cfg.agents[r.agent] = c;
+    });
+
+    // 2. Monthly targets
+    cfg.monthly_targets = {};
+    monthly.forEach(r => {
+      if (!cfg.monthly_targets[r.month]) cfg.monthly_targets[r.month] = {};
+      const c = { is_newbie: r.is_newbie, active: r.active };
+      ['sales_progression', 'brand_commission', 'kpi_targets', 'kpi_overrides'].forEach(k => {
+        if (r[k] !== null && r[k] !== undefined) c[k] = r[k];
+      });
+      cfg.monthly_targets[r.month][r.agent] = c;
+    });
+
+    // 3. Agent pins
+    cfg.agent_pins = {};
+    pins.forEach(r => { cfg.agent_pins[r.agent] = r.pin; });
+
+    // 4. Birthday overrides
+    cfg.birthday_overrides = {};
+    bday.forEach(r => {
+      cfg.birthday_overrides[r.debtor_code] = {
+        birth_date: r.birth_date || '',
+        ...(r.birth_month ? { birth_month: r.birth_month } : {}),
+      };
+    });
+
+    // 5. Group brand targets
+    cfg.group_brand_targets = {};
+    gbt.forEach(r => { cfg.group_brand_targets[r.brand] = parseFloat(r.target_ctn) || 0; });
+
+    // 6. Static config (JSON blobs)
+    staticRows.forEach(r => { cfg[r.key] = r.value; });
+
+    // 7. Snapshots
+    const monthlySnaps = {}, penSnaps = {};
+    snaps.forEach(r => {
+      if (r.kind === 'monthly') monthlySnaps[r.month] = r.value;
+      else if (r.kind === 'penetration') penSnaps[r.month] = r.value;
+    });
+    if (Object.keys(monthlySnaps).length) cfg.monthly_snapshots = monthlySnaps;
+    if (Object.keys(penSnaps).length) cfg.penetration_snapshots = penSnaps;
+
+    console.log(`✅ Loaded from Supabase: ${agents.length} agents, ${monthly.length} monthly rows, ${pins.length} pins`);
+    return cfg;
+  } catch (e) {
+    console.error('loadConfigFromSupabase failed:', e);
+    return null;
+  }
 }
 
 function importJSON(input) {
