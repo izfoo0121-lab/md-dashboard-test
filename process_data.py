@@ -106,12 +106,36 @@ def log(msg):
 
 
 def load_targets():
-    """Load targets.json; return empty structure if missing."""
+    """Load targets from Supabase (primary) with file fallback.
+    Uses targets_loader helper. Also writes targets.json backup on successful load."""
+    try:
+        from targets_loader import load_targets as _load
+        t = _load()
+        if t and ("agents" in t or "monthly_targets" in t):
+            return t
+    except ImportError:
+        log("⚠  targets_loader not found — using file-only mode")
+    except Exception as e:
+        log(f"⚠  Supabase load failed ({e}) — falling back to file")
+
+    # Fallback: read file directly
     if not TARGETS_FILE.exists():
         log("⚠  targets.json not found — using empty targets")
         return {}
     with open(TARGETS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def sync_targets_to_supabase(targets):
+    """Push updated targets (e.g. auto-generated KPI targets, snapshots) back to Supabase.
+    No-op if targets_loader unavailable. Non-blocking — logs but doesn't fail the bat run."""
+    try:
+        from targets_loader import sync_to_supabase
+        sync_to_supabase(targets)
+    except ImportError:
+        pass  # File-only mode, skip
+    except Exception as e:
+        log(f"⚠  Supabase sync failed ({e}) — file is still current source")
 
 
 def get_monthly_targets(targets, cur_month):
@@ -1395,6 +1419,8 @@ def save_debtor_snapshot(debtor_cards, targets, cur_month):
         # Save updated targets.json
         with open(TARGETS_FILE, "w", encoding="utf-8") as f:
             json.dump(targets, f, ensure_ascii=False, indent=2)
+        # Also push to Supabase (non-blocking)
+        sync_targets_to_supabase(targets)
         log(f"  ✅ Snapshot saved + KPI targets auto-calculated for {len(snap)} agents")
     else:
         log(f"  Snapshot for {cur_month} already exists — skipping (Day 1 count preserved)")
@@ -1556,6 +1582,8 @@ def save_penetration_snapshot(brand_comm, targets, cur_month):
     # Save targets.json
     with open(TARGETS_FILE, "w", encoding="utf-8") as f:
         json.dump(targets, f, ensure_ascii=False, indent=2)
+    # Also push to Supabase (non-blocking)
+    sync_targets_to_supabase(targets)
     log(f"  ✅ Penetration snapshot saved — auto-targets set for {len(snap)} agents")
     return targets
 
