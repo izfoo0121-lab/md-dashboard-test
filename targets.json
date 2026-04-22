@@ -1,6 +1,6 @@
 {
   "_comment": "MD Sales Dashboard — loaded from Supabase",
-  "_loaded_at": "2026-04-22T11:53:20.977511",
+  "_loaded_at": "2026-04-22T12:30:47.731888",
   "agents": {
     "BEN": {
       "is_newbie": true,
@@ -67,6 +67,20 @@
         {
           "reward": 2400,
           "threshold": 1171
+        }
+      ],
+      "newbie_account_tiers": [
+        {
+          "count": 3,
+          "reward": 200
+        },
+        {
+          "count": 5,
+          "reward": 600
+        },
+        {
+          "count": 7,
+          "reward": 800
         }
       ]
     },
@@ -805,6 +819,48 @@
   },
   "monthly_targets": {
     "Apr 26": {
+      "_group": {
+        "is_newbie": false,
+        "active": true
+      },
+      "KF": {
+        "is_newbie": false,
+        "active": true,
+        "sales_progression": {
+          "ga": 206.2058,
+          "ma": 153.8467,
+          "normal_t1": 5866.8914,
+          "normal_t2": 6116.8914
+        },
+        "brand_commission": {
+          "EVO": {
+            "ctn_target": 1666,
+            "penetration_target": 6
+          },
+          "TR20": {
+            "ctn_target": 5,
+            "penetration_target": 3
+          },
+          "BISON": {
+            "ctn_target": 249,
+            "penetration_target": 6
+          },
+          "SUKUN": {
+            "ctn_target": 725,
+            "penetration_target": 4
+          },
+          "iFACE": {
+            "ctn_target": 357,
+            "penetration_target": 6
+          },
+          "LAM+LWM": {
+            "ctn_target": 18,
+            "penetration_target": 9
+          }
+        },
+        "kpi_targets": {},
+        "kpi_overrides": {}
+      },
       "BEN": {
         "is_newbie": true,
         "active": true,
@@ -1071,44 +1127,6 @@
         "kpi_targets": {},
         "kpi_overrides": {}
       },
-      "KF": {
-        "is_newbie": false,
-        "active": true,
-        "sales_progression": {
-          "ga": 206.2058,
-          "ma": 153.8467,
-          "normal_t1": 5866.8914,
-          "normal_t2": 6116.8914
-        },
-        "brand_commission": {
-          "EVO": {
-            "ctn_target": 1666,
-            "penetration_target": 6
-          },
-          "TR20": {
-            "ctn_target": 5,
-            "penetration_target": 3
-          },
-          "BISON": {
-            "ctn_target": 249,
-            "penetration_target": 6
-          },
-          "SUKUN": {
-            "ctn_target": 725,
-            "penetration_target": 4
-          },
-          "iFACE": {
-            "ctn_target": 357,
-            "penetration_target": 6
-          },
-          "LAM+LWM": {
-            "ctn_target": 18,
-            "penetration_target": 9
-          }
-        },
-        "kpi_targets": {},
-        "kpi_overrides": {}
-      },
       "KI-MI": {
         "is_newbie": true,
         "active": true,
@@ -1298,10 +1316,6 @@
         },
         "kpi_targets": {},
         "kpi_overrides": {}
-      },
-      "_group": {
-        "is_newbie": false,
-        "active": true
       }
     },
     "Jan 26": {
