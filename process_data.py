@@ -410,23 +410,51 @@ def calc_sales_progression(df, targets, agents, cur_month):
 
 # ── Module 2: Brand Commission ────────────────────────────────────────────────
 
-def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_config):
+def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_config, debtor_info=None):
     """
     Per agent per brand:
       Criteria 1 — Penetration: debtors with 0 purchases in prev 3 months, buys this month
+                   Uses INVOICE-MONTH (tranx_mth_full) to match Excel master convention.
+                   Excludes Personal type, new accounts (<90 days), and empty-type debtors.
       Criteria 2 — CTN target:  paid CTN this month >= target
+                   Uses PAID-MONTH (paid_on) for cash-basis commission accrual.
       Special:  EVO — only rows where rm_ctn >= 36
     """
     log("Calculating Brand Commission...")
+    if debtor_info is None:
+        debtor_info = {}
 
     # Canggih only
     canggih = df[df["item_group"] != EIGHTCOM_GROUP].copy()
 
-    # Paid this month (for CTN target and commission calc)
+    # Use invoice-month column if available (for penetration lookback)
+    inv_col = "tranx_mth_full" if "tranx_mth_full" in canggih.columns else "paid_on"
+
+    # Paid this month (for CTN target and commission calc) — cash-basis
     paid_cur = canggih[canggih["paid_on"] == cur_month]
 
-    # Previous 3 months data (for penetration lookback)
-    prev_paid = canggih[canggih["paid_on"].isin(prev_months)]
+    # Penetration data — invoice-basis (matches Excel)
+    inv_cur       = canggih[canggih[inv_col] == cur_month]
+    inv_prev_3mo  = canggih[canggih[inv_col].isin(prev_months)]
+
+    # Eligibility filter for penetration (excludes Personal, new accounts, empty-type)
+    def _pen_eligible(code):
+        info = debtor_info.get(code, {})
+        dtype = (info.get("type", "") or "").strip()
+        if not dtype:
+            return False  # empty-type (data quality)
+        if dtype == "P-Personal":
+            return False  # Personal accounts aren't real penetration targets
+        # Exclude new accounts (<90 days since open_date)
+        open_date = info.get("open_date")
+        if open_date and pd.notnull(open_date):
+            try:
+                od = pd.to_datetime(open_date)
+                if (datetime.now() - od).days <= 90:
+                    return False
+            except Exception:
+                pass
+        return True
 
     result = {}
 
@@ -435,8 +463,9 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
         ag_tgts   = monthly_agents.get(agent, targets.get("agents", {}).get(agent, {}))
         bc_tgts   = ag_tgts.get("brand_commission", {})
 
-        ag_paid_cur  = paid_cur[paid_cur["agent"] == agent]
-        ag_prev_paid = prev_paid[prev_paid["agent"] == agent]
+        ag_paid_cur   = paid_cur[paid_cur["agent"] == agent]           # CTN target (cash-basis)
+        ag_inv_cur    = inv_cur[inv_cur["agent"] == agent]             # Penetration current (invoice-basis)
+        ag_inv_prev   = inv_prev_3mo[inv_prev_3mo["agent"] == agent]   # Penetration prev (invoice-basis)
 
         result[agent] = {}
 
@@ -445,31 +474,35 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
 
             # ── Filter rows for this brand ──────────────────────────
             if brand == "EVO":
-                # Current month paid: item_code = EVO AND rm_ctn >= 36
+                # CTN (paid-basis) — EVO special: rm_ctn >= 36
                 cur_rows = ag_paid_cur[
                     (ag_paid_cur["item_code"].isin(codes)) &
                     (ag_paid_cur["rm_ctn"] >= EVO_MIN_RM_CTN)
                 ]
-                # Prev months: item_code = EVO (any price — just for penetration lookback)
-                prev_rows = ag_prev_paid[ag_prev_paid["item_code"].isin(codes)]
+                # Penetration (invoice-basis)
+                pen_cur_rows = ag_inv_cur[
+                    (ag_inv_cur["item_code"].isin(codes)) &
+                    (ag_inv_cur["rm_ctn"] >= EVO_MIN_RM_CTN)
+                ]
+                pen_prev_rows = ag_inv_prev[ag_inv_prev["item_code"].isin(codes)]
             else:
                 cur_rows  = ag_paid_cur[ag_paid_cur["item_code"].isin(codes)]
-                prev_rows = ag_prev_paid[ag_prev_paid["item_code"].isin(codes)]
+                pen_cur_rows  = ag_inv_cur[ag_inv_cur["item_code"].isin(codes)]
+                pen_prev_rows = ag_inv_prev[ag_inv_prev["item_code"].isin(codes)]
 
-            # ── Criteria 1: Penetration ─────────────────────────────
-            # Debtors who bought this brand in prev 3 months
-            prev_buyers = set(prev_rows["debtor_code"].unique())
+            # ── Criteria 1: Penetration (invoice-basis, eligibility filtered) ─
+            prev_buyers = set(pen_prev_rows["debtor_code"].unique())
+            cur_buyers_raw = set(pen_cur_rows["debtor_code"].unique())
 
-            # Debtors who bought this brand this month
-            cur_buyers = set(cur_rows["debtor_code"].unique())
+            # Apply eligibility filter to cur_buyers (penetration eligibility)
+            cur_buyers = {c for c in cur_buyers_raw if _pen_eligible(c)}
 
-            # Penetration = debtors in cur_buyers who were NOT in prev_buyers
-            new_penetrations = cur_buyers - prev_buyers
-            penetration_count  = len(new_penetrations)
+            new_penetrations  = cur_buyers - prev_buyers
+            penetration_count = len(new_penetrations)
             penetration_target = brand_tgt.get("penetration_target", 0)
             penetration_hit    = penetration_count >= penetration_target if penetration_target else False
 
-            # ── Criteria 2: CTN Target ──────────────────────────────
+            # ── Criteria 2: CTN Target (paid-basis, unchanged) ──────
             ctn_sold   = round(float(cur_rows["qty_ctn"].sum()), 2)
             ctn_target = brand_tgt.get("ctn_target", 0)
             ctn_hit    = ctn_sold >= ctn_target if ctn_target else False
@@ -520,13 +553,19 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
 
 # ── Module 3: Newbie Scheme ───────────────────────────────────────────────────
 
-def calc_newbie_scheme(df, targets, agents, cur_month):
+def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None):
     """
     For agents flagged as newbie:
       - CTN tiers: per-agent thresholds and rewards (from agent.newbie_tiers)
       - New account bonus: global tiers (same for all newbies)
+
+    new_accounts = debtors where open_date falls in cur_month (from Debtor Maintenance),
+                   filtered to this agent, excluding Personal/empty-type, Active=Checked only.
+    Frontend may override with kpi_manual value if supervisor entered one.
     """
     log("Calculating Newbie Scheme...")
+    if debtor_info is None:
+        debtor_info = {}
 
     newbie_config  = targets.get("newbie_scheme", {})
     account_tiers  = newbie_config.get("account_tiers", [])  # [{count, reward}] — global
@@ -545,8 +584,17 @@ def calc_newbie_scheme(df, targets, agents, cur_month):
         (df["paid_on"] == cur_month)
     ]
 
-    # All historical data for new account detection
-    all_prev = df[df["paid_on"] != cur_month]
+    # Parse cur_month to (year, month_num) for open_date comparison
+    # cur_month format: "Apr 26" → (2026, 4)
+    cur_year = None
+    cur_month_num = None
+    try:
+        parts = cur_month.split()
+        mons = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+        cur_month_num = mons.index(parts[0]) + 1
+        cur_year = 2000 + int(parts[1])
+    except Exception:
+        pass
 
     result = {}
 
@@ -574,13 +622,29 @@ def calc_newbie_scheme(df, targets, agents, cur_month):
                 ctn_tier_hit = tier["threshold"]
                 ctn_reward   = tier["reward"]
 
-        # New accounts this month vs all previous
-        cur_debtors  = set(df[
-            (df["agent"] == agent) & (df["paid_on"] == cur_month)
-        ]["debtor_code"].unique())
-        prev_debtors = set(all_prev[all_prev["agent"] == agent]["debtor_code"].unique())
-        new_accounts = cur_debtors - prev_debtors
-        new_acc_count = len(new_accounts)
+        # New accounts: count debtors from Debtor Maintenance with open_date in cur_month,
+        # assigned to this agent, non-Personal + non-empty type, dm_active=True
+        new_acc_count = 0
+        new_acc_codes = []
+        if cur_year and cur_month_num:
+            for code, info in debtor_info.items():
+                if info.get("agent", "").strip().upper() != agent.upper():
+                    continue
+                if not info.get("dm_active", True):
+                    continue
+                dtype = (info.get("type", "") or "").strip()
+                if not dtype or dtype == "P-Personal":
+                    continue
+                open_date = info.get("open_date")
+                if not open_date or not pd.notnull(open_date):
+                    continue
+                try:
+                    od = pd.to_datetime(open_date)
+                    if od.year == cur_year and od.month == cur_month_num:
+                        new_acc_count += 1
+                        new_acc_codes.append(code)
+                except Exception:
+                    continue
 
         # Account bonus tier (global)
         acc_tier_hit = None
@@ -597,6 +661,7 @@ def calc_newbie_scheme(df, targets, agents, cur_month):
             "ctn_tier_hit":    ctn_tier_hit,
             "ctn_reward":      ctn_reward,
             "new_accounts":    new_acc_count,
+            "new_account_codes": new_acc_codes,  # NEW: list of which debtor codes counted
             "account_tiers":   account_tiers,   # global tiers
             "acc_tier_hit":    acc_tier_hit,
             "acc_reward":      acc_reward,
@@ -823,6 +888,62 @@ def _parse_birth_date(val):
     except:
         return None
 
+def build_debtor_info(debtor_df):
+    """Build debtor lookup dict from Debtor Maintenance DataFrame.
+    Extracted from calc_debtor_cards() so it can be shared with calc_brand_commission
+    and calc_newbie_scheme.
+    Returns: {debtor_code: {name, phone, vip, birth_date, open_date, type, agent, dm_active}}
+    """
+    debtor_info = {}
+    if debtor_df.empty:
+        return debtor_info
+
+    cols = list(debtor_df.columns)
+
+    # Exact column names from Debtor Maintenance.xlsx
+    CODE_COL   = next((c for c in cols if c.strip() in ('Code','Debtor Code')), cols[0] if cols else None)
+    NAME_COL   = next((c for c in cols if 'Company' in c or 'Name' in c), None)
+    ATT_COL    = next((c for c in cols if 'Attention' in c), None)
+    TYPE_COL   = next((c for c in cols if 'Debtor Type' in c or c=='Type'), None)
+    PHONE_COL  = next((c for c in cols if 'Phone' in c), None)
+    OPEN_COL   = next((c for c in cols if 'Open Acct' in c or 'Open' in c), None)
+    BIRTH_COL  = next((c for c in cols if 'Birth' in c), None)
+    AGENT_COL  = next((c for c in cols if c.strip() == 'Agent'), None)
+    ACTIVE_COL = next((c for c in cols if c.strip() == 'Active'), None)
+
+    for _, row in debtor_df.iterrows():
+        code = str(row.get(CODE_COL, '') if CODE_COL else '').strip()
+        if not code or code.lower() in ('nan', 'none', ''):
+            continue
+
+        phone_raw = str(row.get(PHONE_COL, '') if PHONE_COL else '').strip()
+        phone_raw = '' if phone_raw.lower() in ('nan', 'none') else phone_raw
+
+        vip_raw   = str(row.get(ATT_COL, '') if ATT_COL else '').strip().upper()
+        type_raw  = str(row.get(TYPE_COL, '') if TYPE_COL else '').strip()
+        type_raw  = '' if type_raw.lower() in ('nan', 'none') else type_raw
+        agent_raw = str(row.get(AGENT_COL, '') if AGENT_COL else '').strip()
+        agent_raw = '' if agent_raw.lower() in ('nan', 'none') else agent_raw
+
+        dm_active = True
+        if ACTIVE_COL:
+            av = str(row.get(ACTIVE_COL, '')).strip().lower()
+            dm_active = av not in ('unchecked','false','0','n','no','inactive','nan','none','')
+
+        debtor_info[code] = {
+            "name":       str(row.get(NAME_COL, code) if NAME_COL else code).strip(),
+            "phone":      phone_raw,
+            "vip":        vip_raw == "VIP",
+            "birth_date": row.get(BIRTH_COL, None) if BIRTH_COL else None,
+            "open_date":  row.get(OPEN_COL, None)  if OPEN_COL  else None,
+            "type":       type_raw,
+            "agent":      agent_raw,
+            "dm_active":  dm_active,
+        }
+
+    return debtor_info
+
+
 def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_groups=None):
     """
     Preserve existing Phase 1 debtor card logic:
@@ -859,56 +980,10 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
         (df["paid_on"] != "")
     ]
 
-    # Build debtor lookup from Debtor Maintenance
-    debtor_info = {}
-    if not debtor_df.empty:
-        cols = list(debtor_df.columns)
-        log(f"  Debtor columns: {cols}")
-
-        # Exact column names from Debtor Maintenance.xlsx
-        # Code, Company Name, Attention, Debtor Type, Phone 1, Area, Agent,
-        # Active, Open Acct Date, Birth Date
-        CODE_COL   = next((c for c in cols if c.strip() in ('Code','Debtor Code')), cols[0] if cols else None)
-        NAME_COL   = next((c for c in cols if 'Company' in c or 'Name' in c), None)
-        ATT_COL    = next((c for c in cols if 'Attention' in c), None)
-        TYPE_COL   = next((c for c in cols if 'Debtor Type' in c or c=='Type'), None)
-        PHONE_COL  = next((c for c in cols if 'Phone' in c), None)
-        OPEN_COL   = next((c for c in cols if 'Open Acct' in c or 'Open' in c), None)
-        BIRTH_COL  = next((c for c in cols if 'Birth' in c), None)
-        AGENT_COL  = next((c for c in cols if c.strip() == 'Agent'), None)
-        ACTIVE_COL = next((c for c in cols if c.strip() == 'Active'), None)
-
-        log(f"  Mapped → code:{CODE_COL} name:{NAME_COL} phone:{PHONE_COL} type:{TYPE_COL} vip:{ATT_COL} agent:{AGENT_COL} active:{ACTIVE_COL}")
-
-        for _, row in debtor_df.iterrows():
-            code = str(row.get(CODE_COL, '') if CODE_COL else '').strip()
-            if not code or code.lower() in ('nan', 'none', ''):
-                continue
-
-            phone_raw = str(row.get(PHONE_COL, '') if PHONE_COL else '').strip()
-            phone_raw = '' if phone_raw.lower() in ('nan', 'none') else phone_raw
-
-            vip_raw   = str(row.get(ATT_COL, '') if ATT_COL else '').strip().upper()
-            type_raw  = str(row.get(TYPE_COL, '') if TYPE_COL else '').strip()
-            type_raw  = '' if type_raw.lower() in ('nan', 'none') else type_raw
-            agent_raw = str(row.get(AGENT_COL, '') if AGENT_COL else '').strip()
-            agent_raw = '' if agent_raw.lower() in ('nan', 'none') else agent_raw
-
-            dm_active = True
-            if ACTIVE_COL:
-                av = str(row.get(ACTIVE_COL, '')).strip().lower()
-                dm_active = av not in ('unchecked','false','0','n','no','inactive','nan','none','')
-
-            debtor_info[code] = {
-                "name":       str(row.get(NAME_COL, code) if NAME_COL else code).strip(),
-                "phone":      phone_raw,
-                "vip":        vip_raw == "VIP",
-                "birth_date": row.get(BIRTH_COL, None) if BIRTH_COL else None,
-                "open_date":  row.get(OPEN_COL, None)  if OPEN_COL  else None,
-                "type":       type_raw,
-                "agent":      agent_raw,
-                "dm_active":  dm_active,
-            }
+    # Build debtor lookup from Debtor Maintenance (via shared helper)
+    debtor_info = build_debtor_info(debtor_df)
+    if debtor_info:
+        log(f"  Debtor info loaded: {len(debtor_info)} entries")
 
     # SKU groups
     sku_groups = {
@@ -1032,16 +1107,19 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
                 trend = "flat"
 
             # SKU group status per group
+            # Uses INVOICE-MONTH (tranx_mth_full) for matching Excel penetration convention.
             # green  = didn't buy last 3 months BUT bought this month (new penetration)
             # yellow = bought in last 3 months (regular — may or may not buy this month)
             # red    = not bought in last 3 months AND not this month (lapsed)
             sku_status = {}
             sku_bought_groups = 0
             sku_sales_type = {}  # sales type per SKU group this month
+            # Prefer invoice-month for classification; fall back to paid_on if unavailable
+            _inv_col = "tranx_mth_full" if "tranx_mth_full" in d_rows.columns else "paid_on"
             for grp, codes in sku_groups.items():
                 grp_rows = d_rows[d_rows["item_code"].isin(codes)]
-                bought_this  = cur_m in grp_rows["paid_on"].values
-                bought_past  = any(m in grp_rows["paid_on"].values for m in [prev1_m, prev2_m, prev3_m])
+                bought_this  = cur_m in grp_rows[_inv_col].values
+                bought_past  = any(m in grp_rows[_inv_col].values for m in [prev1_m, prev2_m, prev3_m])
                 if bought_this and not bought_past:
                     sku_status[grp] = "new_penetration"
                     sku_bought_groups += 1
@@ -1052,9 +1130,9 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
                 else:
                     sku_status[grp] = "lapsed"
 
-                # Sales type for this SKU group this month
+                # Sales type for this SKU group this month (still paid-basis for commission accrual)
                 if bought_this:
-                    cur_grp_rows = grp_rows[grp_rows["paid_on"] == cur_m]
+                    cur_grp_rows = grp_rows[grp_rows[_inv_col] == cur_m]
                     types = cur_grp_rows["sales_type"].unique().tolist()
                     # Pick best tier: Target > Grey Area > MA > MA Promo > Below MA
                     tier_order = ["Target", "Grey Area", "Master Agent 35/45/55",
@@ -2492,13 +2570,17 @@ def main():
             df = _pd.concat([df, extra], ignore_index=True)
             log(f"  Inheritance: added {len(rows_to_add)} rows to successors")
 
+    # Build shared debtor_info (used by multiple modules)
+    debtor_info_shared = build_debtor_info(debtor_df)
+    log(f"  Shared debtor_info built: {len(debtor_info_shared)} debtors")
+
     # ── Run modules ─────────────────────────────────────────────────
     sales_prog  = calc_sales_progression(df, targets, all_agents, cur_month)
-    brand_comm  = calc_brand_commission(df, targets, all_agents, cur_month, prev_months, brand_config)
+    brand_comm  = calc_brand_commission(df, targets, all_agents, cur_month, prev_months, brand_config, debtor_info=debtor_info_shared)
 
     # ── Auto-calculate penetration targets from non-buyer counts ─────────────
     targets = save_penetration_snapshot(brand_comm, targets, cur_month)
-    newbie      = calc_newbie_scheme(df, targets, agents, cur_month)
+    newbie      = calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=debtor_info_shared)
     aging       = calc_aging(df, all_agents, cur_month)
     debtor_cards = calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map, area_groups)
 
