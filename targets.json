@@ -1,5 +1,5 @@
 {
-  "_comment": "MD Sales Dashboard \u2014 Monthly Targets + KPI Weights. Edit via Admin Page.",
+  "_comment": "MD Sales Dashboard — Monthly Targets + KPI Weights. Edit via Admin Page.",
   "_month": "Mar 2026",
   "_scope": "GRP 2A (Miracle & SS2)",
   "brand_config": {
@@ -146,7 +146,21 @@
         "non_personal": 91,
         "prev_inactive": 46,
         "month": "Mar 26"
-      }
+      },
+      "newbie_tiers": [
+        {
+          "threshold": 800,
+          "reward": 1200
+        },
+        {
+          "threshold": 930,
+          "reward": 1800
+        },
+        {
+          "threshold": 1171,
+          "reward": 2400
+        }
+      ]
     },
     "CJ": {
       "is_newbie": false,
@@ -563,7 +577,21 @@
         "non_personal": 157,
         "prev_inactive": 60,
         "month": "Mar 26"
-      }
+      },
+      "newbie_tiers": [
+        {
+          "threshold": 1000,
+          "reward": 1200
+        },
+        {
+          "threshold": 1342,
+          "reward": 1800
+        },
+        {
+          "threshold": 1592,
+          "reward": 2400
+        }
+      ]
     },
     "KW": {
       "is_newbie": false,
@@ -719,7 +747,21 @@
         "non_personal": 122,
         "prev_inactive": 34,
         "month": "Mar 26"
-      }
+      },
+      "newbie_tiers": [
+        {
+          "threshold": 3800,
+          "reward": 1200
+        },
+        {
+          "threshold": 4300,
+          "reward": 1800
+        },
+        {
+          "threshold": 4526,
+          "reward": 2400
+        }
+      ]
     },
     "YI": {
       "is_newbie": true,
@@ -771,7 +813,21 @@
         "non_personal": 169,
         "prev_inactive": 82,
         "month": "Mar 26"
-      }
+      },
+      "newbie_tiers": [
+        {
+          "threshold": 2950,
+          "reward": 1200
+        },
+        {
+          "threshold": 3061,
+          "reward": 1800
+        },
+        {
+          "threshold": 3411,
+          "reward": 2400
+        }
+      ]
     },
     "SAM": {
       "is_newbie": false,

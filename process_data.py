@@ -437,7 +437,9 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
     inv_cur       = canggih[canggih[inv_col] == cur_month]
     inv_prev_3mo  = canggih[canggih[inv_col].isin(prev_months)]
 
-    # Eligibility filter for penetration (excludes Personal, new accounts, empty-type)
+    # Eligibility filter for penetration.
+    # Rule: exclude Personal type + empty debtor_type (data quality).
+    # Do NOT exclude new accounts (<90 days) — if they bought the brand, count them.
     def _pen_eligible(code):
         info = debtor_info.get(code, {})
         dtype = (info.get("type", "") or "").strip()
@@ -445,15 +447,6 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
             return False  # empty-type (data quality)
         if dtype == "P-Personal":
             return False  # Personal accounts aren't real penetration targets
-        # Exclude new accounts (<90 days since open_date)
-        open_date = info.get("open_date")
-        if open_date and pd.notnull(open_date):
-            try:
-                od = pd.to_datetime(open_date)
-                if (datetime.now() - od).days <= 90:
-                    return False
-            except Exception:
-                pass
         return True
 
     result = {}
@@ -502,8 +495,10 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
             penetration_target = brand_tgt.get("penetration_target", 0)
             penetration_hit    = penetration_count >= penetration_target if penetration_target else False
 
-            # ── Criteria 2: CTN Target (paid-basis, unchanged) ──────
-            ctn_sold   = round(float(cur_rows["qty_ctn"].sum()), 2)
+            # ── Criteria 2: CTN Target (INVOICE-basis, matches Excel brand target convention) ──
+            # Per Isaac's rule: brand target (penetration + CTN) uses invoice date;
+            # normal T1/T2/GA/MA uses paid date (unchanged elsewhere in the pipeline).
+            ctn_sold   = round(float(pen_cur_rows["qty_ctn"].sum()), 2)
             ctn_target = brand_tgt.get("ctn_target", 0)
             ctn_hit    = ctn_sold >= ctn_target if ctn_target else False
 
@@ -1078,8 +1073,11 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
             ctn_prev2 = round(float(d_rows[d_rows["paid_on"] == prev2_m]["qty_ctn"].sum()), 2) if not d_rows.empty else 0.0
 
             # Item breakdown per month (for tooltip on CTN tap)
+            # Uses invoice date (tranx_mth_full) — matches sku_status and brand penetration logic.
+            # Per Isaac's rule: brand-level metrics use invoice; normal totals use paid.
+            _bd_col = "tranx_mth_full" if "tranx_mth_full" in d_rows.columns else "paid_on"
             def item_breakdown(month_label):
-                m_rows = d_rows[d_rows["paid_on"] == month_label]
+                m_rows = d_rows[d_rows[_bd_col] == month_label]
                 if m_rows.empty:
                     return []
                 grp = m_rows.groupby("item_code")["qty_ctn"].sum().reset_index()
