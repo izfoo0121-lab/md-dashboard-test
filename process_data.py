@@ -1897,6 +1897,11 @@ def calc_team_summary(sales_prog, brand_comm, agents, targets, cur_month, df=Non
     team_targets = targets.get("team", {})
     # Use monthly targets for correct month
     monthly_agents = get_monthly_targets(targets, cur_month)
+
+    # Check for group-level override (stored as _group_override key in monthly_targets[month])
+    _month_cfg = (targets.get("monthly_targets") or {}).get(cur_month) or {}
+    _group_override = _month_cfg.get("_group_override") or {}
+
     t1_total = sum(
         (monthly_agents.get(a) or targets.get("agents", {}).get(a, {})).get("sales_progression", {}).get("normal_t1", 0) or 0
         for a in agents
@@ -1922,6 +1927,19 @@ def calc_team_summary(sales_prog, brand_comm, agents, targets, cur_month, df=Non
         (monthly_agents.get(a) or targets.get("agents", {}).get(a, {})).get("sales_progression", {}).get("ma", 0) or 0
         for a in agents
     )
+
+    # Apply group-level override if set (strategic/operational divergence)
+    # Override values take precedence over sum of agents
+    if _group_override:
+        if _group_override.get("normal_t1") is not None:
+            t1_total = float(_group_override["normal_t1"]) or t1_total
+        if _group_override.get("normal_t2") is not None:
+            t2_total = float(_group_override["normal_t2"]) or t2_total
+        if _group_override.get("ga") is not None:
+            ga_total = float(_group_override["ga"]) or ga_total
+        if _group_override.get("ma") is not None:
+            ma_total = float(_group_override["ma"]) or ma_total
+        log(f"  Group override applied for {cur_month}: T1={t1_total}, T2={t2_total}, GA={ga_total}, MA={ma_total}")
 
     # Brand commission team totals
     brand_summary = {}
