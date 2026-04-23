@@ -45,9 +45,36 @@ SCOPE_AREA      = "GRP 2A"
 # 8COM item group identifier
 EIGHTCOM_GROUP  = "8COM"
 
-# EVO commission: only item code 'EVO', RM/CTN (col S) >= 36
-EVO_ITEM_CODE   = "EVO"
-EVO_MIN_RM_CTN  = 36.0
+# EVO commission thresholds — date-based rule:
+#   Invoice date ≤ 2026-04-07: rm_ctn ≥ RM 36
+#   Invoice date ≥ 2026-04-08: rm_ctn ≥ RM 41
+# Penetration count has NO price filter (any EVO invoice qualifies).
+EVO_ITEM_CODE       = "EVO"
+EVO_MIN_RM_CTN_OLD  = 36.0        # for invoices on or before Apr 7, 2026
+EVO_MIN_RM_CTN_NEW  = 41.0        # for invoices from Apr 8, 2026 onwards
+EVO_PRICE_CUTOFF    = pd.Timestamp("2026-04-07")  # last day of old rule (inclusive)
+# New EVO rule (no price filter for penetration + date-split CTN) only applies
+# for months ≥ Apr 26. Prior months keep legacy behavior (RM36+ for both).
+EVO_NEW_RULE_FROM_MONTH = "Apr 26"
+# Legacy alias kept for backward compat (used by brand_campaigns logic, line ~1731)
+EVO_MIN_RM_CTN      = EVO_MIN_RM_CTN_OLD
+
+
+def _month_sort_key(month_label):
+    """Convert 'Apr 26' / 'Oct 25' style label to sortable integer (e.g. 202604)."""
+    try:
+        parts = month_label.strip().split()
+        mons = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        mm = mons.index(parts[0]) + 1
+        yy = 2000 + int(parts[1])
+        return yy * 100 + mm
+    except Exception:
+        return 0
+
+
+def _use_new_evo_rule(cur_month):
+    """True if cur_month >= EVO_NEW_RULE_FROM_MONTH (Apr 26 onwards)."""
+    return _month_sort_key(cur_month) >= _month_sort_key(EVO_NEW_RULE_FROM_MONTH)
 
 # Aging threshold in days
 OVERDUE_DAYS    = 60
@@ -442,7 +469,11 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
                    Excludes Personal type, new accounts (<90 days), and empty-type debtors.
       Criteria 2 — CTN target:  paid CTN this month >= target
                    Uses PAID-MONTH (paid_on) for cash-basis commission accrual.
-      Special:  EVO — only rows where rm_ctn >= 36
+      Special:  EVO — penetration has NO price filter universally (any EVO invoice counts).
+                CTN target rm_ctn threshold is date-based (Apr 26+ only):
+                  • invoices ≤ 2026-04-07 → rm_ctn ≥ RM 36
+                  • invoices ≥ 2026-04-08 → rm_ctn ≥ RM 41
+                Pre-Apr 26 months use legacy flat RM 36 filter for CTN target.
     """
     log("Calculating Brand Commission...")
     if debtor_info is None:
@@ -491,21 +522,54 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
 
             # ── Filter rows for this brand ──────────────────────────
             if brand == "EVO":
-                # CTN (paid-basis) — EVO special: rm_ctn >= 36
-                cur_rows = ag_paid_cur[
-                    (ag_paid_cur["item_code"].isin(codes)) &
-                    (ag_paid_cur["rm_ctn"] >= EVO_MIN_RM_CTN)
-                ]
-                # Penetration (invoice-basis)
-                pen_cur_rows = ag_inv_cur[
-                    (ag_inv_cur["item_code"].isin(codes)) &
-                    (ag_inv_cur["rm_ctn"] >= EVO_MIN_RM_CTN)
-                ]
+                # Penetration (invoice-basis) — NEVER has price filter (universal rule).
+                # Any EVO invoice counts toward penetration, regardless of rm_ctn or month.
+                pen_cur_rows  = ag_inv_cur[ag_inv_cur["item_code"].isin(codes)]
                 pen_prev_rows = ag_inv_prev[ag_inv_prev["item_code"].isin(codes)]
+
+                if _use_new_evo_rule(cur_month):
+                    # NEW CTN TARGET RULE (Apr 26 onwards):
+                    # Date-split rm_ctn threshold — ≤Apr7: RM36+, ≥Apr8: RM41+
+                    _ag_paid_evo = ag_paid_cur[ag_paid_cur["item_code"].isin(codes)]
+                    if "date_parsed" in _ag_paid_evo.columns:
+                        _dt = _ag_paid_evo["date_parsed"]
+                        _is_old = _dt.notnull() & (_dt <= EVO_PRICE_CUTOFF)
+                        _is_new = _dt.notnull() & (_dt >  EVO_PRICE_CUTOFF)
+                        cur_rows = _ag_paid_evo[
+                            (_is_old & (_ag_paid_evo["rm_ctn"] >= EVO_MIN_RM_CTN_OLD)) |
+                            (_is_new & (_ag_paid_evo["rm_ctn"] >= EVO_MIN_RM_CTN_NEW))
+                        ]
+                    else:
+                        cur_rows = _ag_paid_evo[_ag_paid_evo["rm_ctn"] >= EVO_MIN_RM_CTN_OLD]
+
+                    # CTN sold for brand target (invoice-basis, date-split price filter)
+                    _ag_inv_evo = ag_inv_cur[ag_inv_cur["item_code"].isin(codes)]
+                    if "date_parsed" in _ag_inv_evo.columns:
+                        _dt = _ag_inv_evo["date_parsed"]
+                        _is_old = _dt.notnull() & (_dt <= EVO_PRICE_CUTOFF)
+                        _is_new = _dt.notnull() & (_dt >  EVO_PRICE_CUTOFF)
+                        ctn_target_rows = _ag_inv_evo[
+                            (_is_old & (_ag_inv_evo["rm_ctn"] >= EVO_MIN_RM_CTN_OLD)) |
+                            (_is_new & (_ag_inv_evo["rm_ctn"] >= EVO_MIN_RM_CTN_NEW))
+                        ]
+                    else:
+                        ctn_target_rows = _ag_inv_evo[_ag_inv_evo["rm_ctn"] >= EVO_MIN_RM_CTN_OLD]
+                else:
+                    # LEGACY CTN TARGET RULE (before Apr 26): rm_ctn ≥ 36 flat
+                    cur_rows = ag_paid_cur[
+                        (ag_paid_cur["item_code"].isin(codes)) &
+                        (ag_paid_cur["rm_ctn"] >= EVO_MIN_RM_CTN_OLD)
+                    ]
+                    # CTN target rows (invoice-basis) — legacy: same price filter as penetration used to have
+                    ctn_target_rows = ag_inv_cur[
+                        (ag_inv_cur["item_code"].isin(codes)) &
+                        (ag_inv_cur["rm_ctn"] >= EVO_MIN_RM_CTN_OLD)
+                    ]
             else:
                 cur_rows  = ag_paid_cur[ag_paid_cur["item_code"].isin(codes)]
                 pen_cur_rows  = ag_inv_cur[ag_inv_cur["item_code"].isin(codes)]
                 pen_prev_rows = ag_inv_prev[ag_inv_prev["item_code"].isin(codes)]
+                ctn_target_rows = pen_cur_rows  # non-EVO brands: CTN target = all invoice rows
 
             # ── Criteria 1: Penetration (invoice-basis, eligibility filtered) ─
             prev_buyers = set(pen_prev_rows["debtor_code"].unique())
@@ -522,7 +586,9 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
             # ── Criteria 2: CTN Target (INVOICE-basis, matches Excel brand target convention) ──
             # Per Isaac's rule: brand target (penetration + CTN) uses invoice date;
             # normal T1/T2/GA/MA uses paid date (unchanged elsewhere in the pipeline).
-            ctn_sold   = round(float(pen_cur_rows["qty_ctn"].sum()), 2)
+            # EVO: CTN target filtered by date-split rm_ctn threshold (≤Apr7: RM36+, ≥Apr8: RM41+).
+            # Non-EVO: CTN target uses all invoice rows (no price filter).
+            ctn_sold   = round(float(ctn_target_rows["qty_ctn"].sum()), 2)
             ctn_target = brand_tgt.get("ctn_target", 0)
             ctn_hit    = ctn_sold >= ctn_target if ctn_target else False
 
