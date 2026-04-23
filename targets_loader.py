@@ -75,6 +75,13 @@ def load_targets_from_supabase():
             agent = r["agent"]
             if month not in monthly:
                 monthly[month] = {}
+            # Special pseudo-agent '_GROUP_' stores group-level T1/T2/GA/MA override
+            # Flatten it back to _group_override key in monthly[month]
+            if agent == "_GROUP_":
+                sp = r.get("sales_progression") or {}
+                if sp:
+                    monthly[month]["_group_override"] = sp
+                continue
             cfg = {
                 "is_newbie": r.get("is_newbie", False),
                 "active": r.get("active", True),
@@ -198,6 +205,9 @@ def sync_to_supabase(targets):
         rows = []
         for month, agents_month in monthly.items():
             for agent, cfg in agents_month.items():
+                # Skip special keys (start with _) — handled below
+                if agent.startswith("_"):
+                    continue
                 rows.append({
                     "month": month,
                     "agent": agent,
@@ -207,6 +217,20 @@ def sync_to_supabase(targets):
                     "brand_commission": cfg.get("brand_commission"),
                     "kpi_targets": cfg.get("kpi_targets"),
                     "kpi_overrides": cfg.get("kpi_overrides"),
+                    "updated_by": "process_data.py",
+                })
+            # Group-level override → stored as pseudo-agent '_GROUP_'
+            grp_override = agents_month.get("_group_override")
+            if grp_override and isinstance(grp_override, dict) and len(grp_override):
+                rows.append({
+                    "month": month,
+                    "agent": "_GROUP_",
+                    "is_newbie": False,
+                    "active": True,
+                    "sales_progression": grp_override,
+                    "brand_commission": None,
+                    "kpi_targets": None,
+                    "kpi_overrides": None,
                     "updated_by": "process_data.py",
                 })
         # Batch upsert
