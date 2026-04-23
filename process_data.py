@@ -268,8 +268,29 @@ def load_sales_report():
                 "sales_type", "paid_on", "debtor_code"]:
         df[col] = df[col].fillna("").str.strip()
 
-    # Parse invoice date (col C) — stored as Excel serial or string
-    df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
+    # Parse invoice date (col C) — stored as Excel serial OR string OR datetime.
+    # Excel sometimes exports dates as integer serial numbers (days since 1899-12-30).
+    # pd.to_datetime treats integers as nanoseconds → produces "Jan 1970" bug.
+    # Fix: detect numeric values and convert via Excel serial origin.
+    def _parse_date_value(v):
+        if pd.isnull(v):
+            return pd.NaT
+        # If already a datetime, use it
+        if isinstance(v, (pd.Timestamp, datetime)):
+            return pd.Timestamp(v)
+        # If int/float (Excel serial) — convert from Excel epoch
+        if isinstance(v, (int, float)):
+            try:
+                return pd.Timestamp("1899-12-30") + pd.Timedelta(days=float(v))
+            except Exception:
+                return pd.NaT
+        # If string — try standard parse
+        try:
+            return pd.to_datetime(v, errors="coerce")
+        except Exception:
+            return pd.NaT
+
+    df["date_parsed"] = df["date"].apply(_parse_date_value)
 
     # ── Derive tranx_mth_full from date_parsed ─────────────────────────
     # Column A "Tranx Mth" in AutoCount is unreliable (just "Oct" without
