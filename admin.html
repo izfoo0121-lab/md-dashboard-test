@@ -1099,18 +1099,21 @@ async function loadKpiManual() {
 
   // Render form: one row per agent
   form.innerHTML = `
-    <div style="display:grid;grid-template-columns:100px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:2px solid var(--border);font-family:var(--mono);font-size:9px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em;">
+    <div style="display:grid;grid-template-columns:100px 140px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:2px solid var(--border);font-family:var(--mono);font-size:9px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em;">
       <div>Agent</div>
       <div>新户口 (new_accounts)</div>
       <div>VIP招聘 (vip_count)</div>
+      <div>做Event/PSR (event_count)</div>
     </div>
   ` + agents.map(agent => {
     const row = existing[agent] || {};
-    return `<div style="display:grid;grid-template-columns:100px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
+    return `<div style="display:grid;grid-template-columns:100px 140px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
       <div style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink);">${agent}</div>
       <input type="number" id="kpi_m_new_${agent}" min="0" value="${row.new_accounts ?? 0}" step="1"
         style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
       <input type="number" id="kpi_m_vip_${agent}" min="0" value="${row.vip_count ?? 0}" step="1"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
+      <input type="number" id="kpi_m_event_${agent}" min="0" value="${row.event_count ?? 0}" step="1"
         style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
     </div>`;
   }).join('');
@@ -1124,11 +1127,13 @@ async function saveKpiManual() {
   const payload = agents.map(agent => {
     const newAccInput = document.getElementById(`kpi_m_new_${agent}`);
     const vipInput    = document.getElementById(`kpi_m_vip_${agent}`);
+    const eventInput  = document.getElementById(`kpi_m_event_${agent}`);
     if (!newAccInput || !vipInput) return null;
     return {
       month, agent,
       new_accounts: parseInt(newAccInput.value) || 0,
       vip_count:    parseInt(vipInput.value) || 0,
+      event_count:  parseInt(eventInput?.value) || 0,
       updated_at:   new Date().toISOString(),
       updated_by:   'admin_ui'
     };

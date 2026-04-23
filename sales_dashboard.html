@@ -282,8 +282,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
 .view.active > *:nth-child(4){animation-delay:.15s;}
 .view.active > *:nth-child(5){animation-delay:.2s;}
 </style>
-<!-- Supabase JS SDK for realtime subscriptions (REST works without it) -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -309,18 +307,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
         <div class="month-badge" id="month-badge">MAR 2026</div>
         <div class="day-prog" id="day-prog">Day — of —</div>
         <div style="font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:2px;" id="last-update">Updated: —</div>
-        <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;margin-top:3px;">
-          <span id="sync-indicator" style="font-family:var(--mono);font-size:8px;color:var(--muted);">— </span>
-          <button id="sync-btn" onclick="manualSync(this)"
-            style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.05);color:var(--text);cursor:pointer;">
-            🔄 Sync
-          </button>
-          <button id="logout-btn" onclick="logout()"
-            title="Log out / switch agent"
-            style="font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:6px;border:1px solid rgba(255,95,95,.3);background:rgba(255,95,95,.08);color:#ff9090;cursor:pointer;">
-            ↪ Log out
-          </button>
-        </div>
         <select id="month-selector-agent" onchange="switchMonth(this.value)"
           style="display:none;margin-top:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
                  color:#fff;font-family:var(--mono);font-size:8px;padding:2px 6px;border-radius:6px;cursor:pointer;">
@@ -382,50 +368,24 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
 </style>
 
 <script>
-// ── Agent PINs — fetched from Supabase ─────────────────────────────────
-// Storage priority (highest wins):
-//   1. Supabase agent_pins table (live, editable via admin.html)
-//   2. DATA.config.agent_pins  (legacy — from targets.json, not populated)
-//   3. DEFAULT_PINS below      (hardcoded fallback — should never be reached
-//                                 if Supabase is reachable)
-let _supabasePins = null;  // populated async, see fetchSupabasePins()
-
-async function fetchSupabasePins() {
+// ── Agent PINs — set via Admin ─────────────────────────────────────────
+// Format: { AGENT_NAME: '4-digit-pin' }
+// Admin manages these in targets.json under 'agent_pins'
+const AGENT_PINS = (()=>{
   try {
-    const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-    const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_pins?select=agent,pin`, {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`
-      }
-    });
-    if (!r.ok) { console.warn('[PINs] Supabase fetch failed', r.status); return null; }
-    const rows = await r.json();
-    const out = {};
-    rows.forEach(row => { if (row.agent && row.pin) out[row.agent] = row.pin; });
-    _supabasePins = out;
-    // Cache to localStorage for offline reuse
-    try { localStorage.setItem('md_agent_pins_cache', JSON.stringify(out)); } catch {}
-    console.log(`[PINs] Loaded ${Object.keys(out).length} PINs from Supabase`);
-    return out;
-  } catch (e) {
-    console.warn('[PINs] error', e);
-    return null;
-  }
-}
+    const pins = DATA_PINS || {};  // injected after data loads
+    return pins;
+  } catch { return {}; }
+})();
 
-// Kick off fetch immediately (parallel with DATA load)
-fetchSupabasePins();
-
-// Fallback default PINs (last resort if Supabase AND cache AND DATA all fail)
+// Fallback default PINs (overridden by targets.json)
 const DEFAULT_PINS = {
   'BEN':'1001','CJ':'1002','JACKY':'1003','JAMES':'1004',
   'JW':'1005','KEAN':'1006','KEE':'1007','KF':'1008',
-  'KI-MI':'8888','KW':'1010','LEON':'1011','NMK':'5535',
+  'KI-MI':'1009','KW':'1010','LEON':'1011','NMK':'1012',
   'YI':'1013','SAM':'1014',
   // Admin bypass
-  'GT138888':'0121'
+  'GT138888':'0000'
 };
 
 let _pin = '';
@@ -442,24 +402,6 @@ function pinPress(k) {
   if (_pin.length === 4) checkPin();
 }
 
-// Resolve PINs via layered fallback: Supabase → cached → DATA.config → DEFAULT_PINS
-function _resolvePins() {
-  const merged = Object.assign({}, DEFAULT_PINS);
-  // Layer 2: cached copy from last successful Supabase fetch
-  try {
-    const cached = JSON.parse(localStorage.getItem('md_agent_pins_cache') || 'null');
-    if (cached && typeof cached === 'object') Object.assign(merged, cached);
-  } catch {}
-  // Layer 3: DATA.config.agent_pins (legacy — usually empty)
-  try {
-    const fromTargets = (typeof DATA !== 'undefined' && DATA.config?.agent_pins) || {};
-    Object.assign(merged, fromTargets);
-  } catch {}
-  // Layer 4 (highest): fresh Supabase pull (if it finished)
-  if (_supabasePins) Object.assign(merged, _supabasePins);
-  return merged;
-}
-
 function updatePinDisplay() {
   for (let i=0;i<4;i++) {
     const d = document.getElementById('pd'+i);
@@ -469,19 +411,20 @@ function updatePinDisplay() {
   const hint = document.getElementById('pin-name-hint');
   const err  = document.getElementById('pin-err');
   err.textContent = '';
-  hint.textContent = '';
+  const allPins = Object.assign({}, DEFAULT_PINS);
+  const match = Object.entries(allPins).find(([,p])=>p===_pin);
+  hint.textContent = match && _pin.length===4 ? '' : '';
 }
 
-async function checkPin() {
+function checkPin() {
   _pinLocked = true;
-  // If Supabase fetch hasn't resolved yet, wait up to 2s for it
-  if (_supabasePins === null) {
-    await Promise.race([
-      fetchSupabasePins(),
-      new Promise(res => setTimeout(res, 2000))
-    ]);
-  }
-  const allPins = _resolvePins();
+  const allPins = Object.assign({}, DEFAULT_PINS);
+
+  // Try to load from targets.json if available
+  try {
+    const fromTargets = (typeof DATA !== 'undefined' && DATA.config?.agent_pins) || {};
+    Object.assign(allPins, fromTargets);
+  } catch {}
 
   const match = Object.entries(allPins).find(([,p])=>p===_pin);
 
@@ -515,24 +458,6 @@ async function checkPin() {
   }
 }
 
-// ── Logout (clears session, shows PIN gate again) ──────────────────────
-function logout() {
-  if (!confirm('登出 Log out?')) return;
-  sessionStorage.removeItem('md_auth');
-  sessionStorage.removeItem('md_agent');
-  // Reset PIN state
-  _pin = '';
-  _pinLocked = false;
-  // Reset Supabase sync flag so next login re-syncs
-  _claimsSyncedForSession = false;
-  // Show gate
-  const gate = document.getElementById('pin-gate');
-  if (gate) gate.style.display = 'flex';
-  updatePinDisplay();
-  // Scroll to top
-  window.scrollTo(0, 0);
-}
-
 function lockToAgent(agentName) {
   // Auto-select agent and hide the dropdown for non-admins
   const sel = document.getElementById('agent-select');
@@ -563,7 +488,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
   <div class="summary-strip" id="summary-strip">
     <div class="summary-box">
       <div class="val" id="sum-total">—</div>
-      <div class="lbl">总户口 <span style="font-size:7px;color:var(--muted);">(排除 Personal)</span></div>
+      <div class="lbl">总户口</div>
     </div>
     <div class="summary-box">
       <div class="val" style="color:var(--green)" id="sum-active">—</div>
@@ -575,14 +500,14 @@ window.addEventListener('DOMContentLoaded', ()=>{
     </div>
     <div class="summary-box">
       <div class="val" style="color:var(--blue)" id="sum-rate">—</div>
-      <div class="lbl">光顾率</div>
+      <div class="lbl">光顾率*</div>
     </div>
     <div class="summary-box" style="cursor:pointer;" onclick="setSpecialFilter('flagged', document.querySelector('[data-val=\\'flagged\\']'))">
       <div class="val" style="color:var(--red)" id="sum-flags">0</div>
       <div class="lbl">⚑ Flagged</div>
     </div>
   </div>
-  <div style="font-family:var(--mono);font-size:8px;color:var(--muted);padding:2px 2px 6px;">* 所有数目排除 P-Personal · All counts exclude P-Personal (still shown in list below)</div>
+  <div style="font-family:var(--mono);font-size:8px;color:var(--muted);padding:2px 2px 6px;"> * 持续光顾率 excludes P-Personal</div>
   <div style="position:relative;">
     <input class="search-bar" id="debtor-search"
       placeholder="Search debtor name or code across all agents..."
@@ -734,11 +659,6 @@ window.addEventListener('DOMContentLoaded', ()=>{
     <button onclick="setCampFilter('festive_gift',this)" class="filter-chip">🧧 FESTIVE</button>
     <button onclick="setCampFilter('birthday_gift',this)" class="filter-chip">🎂 BIRTHDAY</button>
   </div>
-  <!-- Campaign name filter (populated dynamically by renderCamps) -->
-  <div id="camps-name-filter-bar" style="display:none;padding:6px 14px 8px;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto;white-space:nowrap;">
-    <span style="font-family:var(--mono);font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-right:8px;">Camps:</span>
-    <!-- Chips injected dynamically -->
-  </div>
   <div id="camps-content">
     <div style="text-align:center;padding:30px;font-family:var(--mono);font-size:11px;color:var(--muted);">Select an agent to view campaigns</div>
   </div>
@@ -854,12 +774,6 @@ let filters = { status: 'all', special: null, type: 'all', brand: 'all' };
 let currentPage = 1;
 const PAGE_SIZE = 12;
 
-// ── Supabase config (shared across the file) ──────────────────────────────
-const _SUPA_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-const _SUPA_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
-// Once synced on login, we set this so subsequent renderAll() calls skip re-sync
-let _claimsSyncedForSession = false;
-
 const BRAND_COLORS = {
   'iFACE':'#4da6ff','SUKUN':'#a78bfa','EVO':'#ff5f5f',
   'BISON':'#f0c040','TR20':'#3ddc84','LAM+LWM':'#ff9a3c'
@@ -959,6 +873,8 @@ async function loadData() {
     const r = await fetch('dashboard_data.json?v='+Date.now());
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     DATA = await r.json();
+    // Fetch kpi_manual overrides from Supabase BEFORE init() so first render shows correct values
+    await SupabaseKpiSync.apply(DATA);
     init();
     CURRENT_MONTH_SLUG = (DATA?.current_month||'').replace(' ','').toLowerCase();
     loadMonthIndex(); // load month dropdown after data ready
@@ -969,6 +885,116 @@ async function loadData() {
     </div>`;
   }
 }
+
+// ── SupabaseKpiSync Module ───────────────────────────────────────────────────
+// Fetches admin-entered kpi_manual values (new_accounts, vip_count, event_count)
+// from Supabase and overrides DATA.agents[*].kpi.items[*].actual + recomputes
+// pct / score / section totals / grand totals.
+// Runs once at dashboard load, before init() renders KPI tab.
+const SupabaseKpiSync = (() => {
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+
+  // Mapping: Supabase column → kpi.items key
+  const FIELD_MAP = {
+    'new_accounts': 'new_accounts',
+    'vip_count':    'vip_count',
+    'event_count':  'event',
+  };
+
+  function _scoreItem(actual, target, weight) {
+    // Mirrors score_item() in process_data.py
+    if (!target || target === 0) return 0;
+    return Math.round(Math.min(actual / target, 1.0) * weight * 100 * 1000) / 1000;
+  }
+
+  async function fetch_kpi_manual(month) {
+    if (!month) return [];
+    const url = `${SUPABASE_URL}/rest/v1/kpi_manual?select=*&month=eq.${encodeURIComponent(month)}`;
+    try {
+      const r = await fetch(url, {
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      });
+      if (!r.ok) {
+        console.warn(`[SupabaseKpiSync] fetch failed: HTTP ${r.status}`);
+        return [];
+      }
+      return await r.json();
+    } catch (e) {
+      console.warn('[SupabaseKpiSync] network error:', e.message);
+      return [];
+    }
+  }
+
+  function applyAgentOverride(agentData, row) {
+    // agentData = DATA.agents[agent] object
+    // row      = supabase row for this agent (month, agent, new_accounts, vip_count, event_count)
+    if (!agentData || !agentData.kpi || !agentData.kpi.items) return;
+    const items = agentData.kpi.items;
+
+    Object.entries(FIELD_MAP).forEach(([col, itemKey]) => {
+      const item = items[itemKey];
+      if (!item) return;
+      const newActual = Number(row[col] ?? 0) || 0;
+      const target    = Number(item.target || 0);
+      const weight    = Number(item.weight || 0);
+      // Recompute pct + score
+      item.actual = newActual;
+      item.pct    = target > 0 ? Math.round(newActual / target * 100 * 10) / 10 : 0;
+      item.score  = _scoreItem(newActual, target, weight);
+      // Item is no longer "needs_supabase_fetch" after we supply the value
+      delete item.needs_supabase_fetch;
+    });
+
+    // Recompute section_scores
+    const sectionScores = {};
+    ['A','B','C','D','E'].forEach(sec => {
+      const secItems = Object.values(items).filter(v => v.section === sec);
+      sectionScores[sec] = {
+        score:     Math.round(secItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000,
+        max_score: Math.round(secItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000,
+      };
+    });
+    agentData.kpi.section_scores = sectionScores;
+
+    // Recompute grand_total + grand_pct
+    const allItems = Object.values(items);
+    const grandTotal = Math.round(allItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+    const maxTotal   = Math.round(allItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+    agentData.kpi.grand_total = grandTotal;
+    agentData.kpi.max_total   = maxTotal;
+    agentData.kpi.grand_pct   = maxTotal > 0 ? Math.round(grandTotal / maxTotal * 100 * 10) / 10 : 0;
+
+    // Recompute total_abc (A+B+C only)
+    const abcItems = allItems.filter(v => ['A','B','C'].includes(v.section));
+    const totalABC = Math.round(abcItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+    const maxABC   = Math.round(abcItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+    agentData.kpi.total_abc = totalABC;
+    agentData.kpi.max_abc   = maxABC;
+    agentData.kpi.total_pct = maxABC > 0 ? Math.round(totalABC / maxABC * 100 * 10) / 10 : 0;
+  }
+
+  async function apply(dataObj) {
+    const month = dataObj?.current_month;
+    if (!month) return;
+    const rows = await fetch_kpi_manual(month);
+    if (!rows.length) {
+      console.log(`[SupabaseKpiSync] No kpi_manual rows for ${month}`);
+      return;
+    }
+    let applied = 0;
+    rows.forEach(row => {
+      const agentData = dataObj.agents?.[row.agent];
+      if (agentData) {
+        applyAgentOverride(agentData, row);
+        applied++;
+      }
+    });
+    console.log(`[SupabaseKpiSync] Applied ${applied}/${rows.length} kpi_manual overrides for ${month}`);
+  }
+
+  return { apply, fetch_kpi_manual };
+})();
 
 function init() {
   const wd = DATA.working_days || {};
@@ -987,55 +1013,9 @@ function init() {
       `<span style="color:${col};font-weight:700;">${theo}% elapsed</span>`
     );
   }
-  // Sync claims/flags from Supabase on page load, then re-render so fresh data appears
+  // Sync claims/flags from Gist on page load
   if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
-    GistSync.syncToLocal(DATA.current_month || '').then(res => {
-      if (res && res.ok) {
-        // Re-render Camps + Debtors so claims pulled from Supabase become visible
-        try { if (typeof renderCamps    === 'function') renderCamps();    } catch(e) {}
-        try { if (typeof renderDebtors  === 'function') renderDebtors();  } catch(e) {}
-        // Update sync indicator if present
-        const si = document.getElementById('sync-indicator');
-        if (si) {
-          si.textContent = `✓ Synced ${res.claimCount||0}`;
-          si.style.color = 'var(--green)';
-        }
-      } else {
-        const si = document.getElementById('sync-indicator');
-        if (si) {
-          si.textContent = `⚠ Offline`;
-          si.style.color = 'var(--muted)';
-        }
-      }
-    }).catch(()=>{
-      const si = document.getElementById('sync-indicator');
-      if (si) { si.textContent = '⚠ Sync failed'; si.style.color = 'var(--red)'; }
-    });
-
-    // ── Realtime subscription: admin bulk-marks → agent phones in ~1s ──
-    // Throttle re-renders so a burst of bulk-import events doesn't hammer the UI
-    let _rtPending = false;
-    try {
-      if (typeof GistSync.subscribeClaims === 'function') {
-        GistSync.subscribeClaims(DATA.current_month || '', () => {
-          if (_rtPending) return;
-          _rtPending = true;
-          setTimeout(() => {
-            _rtPending = false;
-            // Re-pull then re-render
-            GistSync.syncToLocal(DATA.current_month || '').then(res => {
-              try { if (typeof renderCamps   === 'function') renderCamps();   } catch(e) {}
-              try { if (typeof renderDebtors === 'function') renderDebtors(); } catch(e) {}
-              const si = document.getElementById('sync-indicator');
-              if (si && res && res.ok) {
-                si.textContent = `✓ Live ${res.claimCount||0}`;
-                si.style.color = 'var(--green)';
-              }
-            }).catch(()=>{});
-          }, 1500); // 1.5s debounce window
-        });
-      }
-    } catch(e) { console.warn('[realtime] subscribe failed', e); }
+    GistSync.syncToLocal(DATA.current_month || '').catch(()=>{});
   }
 
   // Apply agent lock after data loads (session restore)
@@ -1198,9 +1178,6 @@ function selectAgent(agent) {
   currentAgent = agent;
   currentPage  = 1;
   filters = { status:'all', special:null, type:'all', brand:'all' };
-  // Reset Camps tab filters when switching agents
-  _campFilter = 'all';
-  _campIdFilter = 'all';
 
   // If debtors not loaded yet, fetch from GitHub
   const dc = DATA.agents[agent]?.debtor_cards;
@@ -1412,9 +1389,6 @@ function renderDebtors() {
       const grp = SKU_GRP[filters.brand] || filters.brand;
       const st  = (d.sku_status || {})[grp];
       if (st !== 'lapsed') return false;
-      // Match Excel master convention: exclude Personal from brand penetration counts.
-      // Personal-type debtors (agents' own / family accounts) aren't real penetration targets.
-      if (d.debtor_type === 'P-Personal') return false;
     }
     return true;
   });
@@ -2387,14 +2361,8 @@ function renderGroupBrandTargets() {
     </div>`;
 
   // ── Right panel summary ────────────────────────────────────────────────
-  // 前月条数 (已付款) = Prior 3-month invoices paid in cur_month
-  // 本月条数 (已付款) = cur_month invoices paid in cur_month
-  // 总共条数 (已付款) = sum of both = all Canggih paid in cur_month
-  // (They are disjoint: tranx_mth in prev-3-months XOR tranx_mth == cur_month)
   const prevMonthCtn    = team.prev_month_ctn   || 0;
-  const curMonthPaid    = team.cur_month_invoiced_paid != null
-                            ? team.cur_month_invoiced_paid
-                            : (team.team_canggih_ctn || 0);  // back-compat fallback
+  const curMonthPaid    = team.team_canggih_ctn  || 0;
   const totalPaidCtn    = prevMonthCtn + curMonthPaid;
   const totalUnpaidCtn  = team.team_8com_unpaid  || 0;
   const totalSalesCtn   = team.total_sales_ctn   || 0;
@@ -2479,14 +2447,7 @@ function getFlag(agent, debtorCode) {
 }
 function getAgentFlagCount(agent) {
   const flags = loadFlags();
-  const agentFlags = flags[agent] || {};
-  // Exclude Personal-type debtors from flag count (matches summary-card rule)
-  const PERSONAL = ['P-Personal','P-PERSONAL','personal','Personal','PERSONAL'];
-  const debtors = DATA?.agents?.[agent]?.debtor_cards?.debtors || [];
-  const personalCodes = new Set(
-    debtors.filter(d => PERSONAL.includes(d.debtor_type||'')).map(d => d.debtor_code)
-  );
-  return Object.keys(agentFlags).filter(code => !personalCodes.has(code)).length;
+  return Object.keys(flags[agent] || {}).length;
 }
 function getAllFlags() {
   return loadFlags();
@@ -2554,101 +2515,6 @@ function resolveFlag(agent, debtorCode) {
   renderDebtors();
 }
 
-// ── KPI Supabase overrides (new_accounts, vip_count from admin; birthday from claims) ──
-// These 3 KPI items have actual values that live in Supabase, not in dashboard_data.json.
-// This function pulls fresh values and overlays them onto DATA.agents[agent].kpi.items,
-// then recomputes scores + section totals + grand total.
-//
-// Called by renderKPI() before the UI is drawn.
-async function applyKPIOverrides() {
-  if (!currentAgent || !DATA || !DATA.agents?.[currentAgent]?.kpi) return;
-  const month = DATA.current_month;
-  if (!month) return;
-  const kpi = DATA.agents[currentAgent].kpi;
-  const items = kpi.items || {};
-
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
-  const baseHeaders = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-
-  // ── 1. Fetch kpi_manual for this agent+month ────────────────────
-  try {
-    const url = `${SUPABASE_URL}/rest/v1/kpi_manual?select=new_accounts,vip_count&month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(currentAgent)}`;
-    const r = await fetch(url, { headers: baseHeaders });
-    if (r.ok) {
-      const rows = await r.json();
-      if (rows.length > 0) {
-        const row = rows[0];
-        if (items.new_accounts) items.new_accounts.actual = Number(row.new_accounts) || 0;
-        if (items.vip_count)    items.vip_count.actual    = Number(row.vip_count)    || 0;
-      }
-    }
-  } catch (e) { console.warn('[KPI] kpi_manual fetch failed:', e); }
-
-  // ── 2. Fetch birthday claims for this agent+month ────────────────
-  // Birthday KPI actual = count of claims with status='verified' for birthday camps
-  // Submitted = delivered + verified (anything not rejected)
-  // This uses the claims.status field directly — no separate audit_log needed
-  // (campaign_audit.html writes status='verified' directly into the claims table).
-  try {
-    const claimsUrl = `${SUPABASE_URL}/rest/v1/claims?select=camp_id,debtor_code,status&month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(currentAgent)}`;
-    const cr = await fetch(claimsUrl, { headers: baseHeaders });
-    const claims = cr.ok ? await cr.json() : [];
-    // Filter birthday camps (BOTH union: ID contains 'birthday' or 'bday')
-    const isBirthday = (campId) => {
-      const s = String(campId || '').toLowerCase();
-      return s.includes('birthday') || s.includes('bday');
-    };
-    const bdayClaims = claims.filter(c => isBirthday(c.camp_id));
-
-    let verified = 0, submitted = 0;
-    bdayClaims.forEach(c => {
-      if (c.status === 'rejected') return;       // rejected doesn't count
-      submitted++;                                 // delivered + verified both count as "submitted"
-      if (c.status === 'verified') verified++;
-    });
-
-    if (items.birthday_campaign) {
-      items.birthday_campaign.actual = verified;
-      items.birthday_campaign.submitted = submitted;
-      items.birthday_campaign.pending = submitted - verified;
-    }
-  } catch (e) { console.warn('[KPI] birthday claims fetch failed:', e); }
-
-  // ── 3. Recompute scores for overridden items + section totals + grand total
-  const recompute = (item) => {
-    const target = Number(item.target) || 0;
-    const actual = Number(item.actual) || 0;
-    const weight = Number(item.weight) || 0;
-    if (!target || !weight) {
-      item.score = 0; item.pct = 0; return;
-    }
-    item.pct   = Math.round(actual / target * 1000) / 10;
-    item.score = Math.round(Math.min(actual / target, 1.0) * weight * 100 * 1000) / 1000;
-  };
-  ['new_accounts','vip_count','birthday_campaign'].forEach(k => {
-    if (items[k]) recompute(items[k]);
-  });
-
-  // Rebuild section_scores
-  const sections = ['A','B','C','D','E'];
-  kpi.section_scores = {};
-  sections.forEach(sec => {
-    const secItems = Object.values(items).filter(v => v.section === sec);
-    kpi.section_scores[sec] = {
-      score:     Math.round(secItems.reduce((s,v) => s + (v.score||0), 0) * 1000) / 1000,
-      max_score: Math.round(secItems.reduce((s,v) => s + (v.max_score||0), 0) * 1000) / 1000,
-    };
-  });
-
-  // Grand total + ABC total
-  kpi.grand_total = Math.round(Object.values(items).reduce((s,v) => s + (v.score||0), 0) * 1000) / 1000;
-  kpi.max_total   = Math.round(Object.values(items).reduce((s,v) => s + (v.max_score||0), 0) * 1000) / 1000;
-  kpi.total_abc   = Math.round(['A','B','C'].reduce((s,sec) => s + (kpi.section_scores[sec]?.score||0), 0) * 1000) / 1000;
-  kpi.max_abc     = Math.round(['A','B','C'].reduce((s,sec) => s + (kpi.section_scores[sec]?.max_score||0), 0) * 1000) / 1000;
-  kpi.total_pct   = kpi.max_total ? Math.round(kpi.grand_total / kpi.max_total * 1000) / 10 : 0;
-}
-
 // ── View 7: KPI ────────────────────────────────────────────────────────────
 // ── 3-Month Trend Card ─────────────────────────────────────────────────────
 function trendCard() {
@@ -2693,14 +2559,8 @@ function trendCard() {
   </div>`;
 }
 
-async function renderKPI() {
+function renderKPI() {
   if (!currentAgent || !DATA) return;
-
-  // Apply Supabase overrides first (new_accounts, vip_count, birthday).
-  // This modifies DATA.agents[agent].kpi.items in place, then recomputes
-  // section_scores + total_abc + grand_total.
-  await applyKPIOverrides();
-
   const kpi = DATA.agents[currentAgent]?.kpi || {};
   const el  = document.getElementById('kpi-content');
 
@@ -2772,48 +2632,31 @@ async function renderKPI() {
       ${secItems.map(([key, item]) => {
         const barW  = Math.min(item.pct || 0, 100);
         const col   = (item.pct||0) >= 100 ? 'var(--green)' : (item.pct||0) >= 70 ? 'var(--accent)' : 'var(--red)';
-        const isManualMgmt  = item.source === 'manual_mgmt';
-        const isAutoClaims  = item.source === 'auto_claims';
-        const canEdit       = item.input_role === 'agent';
-
-        // Special sub-text for birthday KPI: show "X verified / Y submitted"
-        let subText;
-        if (key === 'birthday_campaign' && item.submitted != null) {
-          const pending = item.pending || 0;
-          subText = `${item.actual||0} verified / ${item.submitted||0} submitted · Target ${item.target||0}`
-                 + (pending > 0 ? ` · <span style="color:var(--accent)">${pending} pending</span>` : '');
-        } else if (item.target != null) {
-          subText = `${item.actual ?? '—'} / ${item.target} · ${(item.pct||0).toFixed(1)}%`;
-        } else {
-          subText = `Score: ${item.actual ?? '—'} pts`;
-        }
-
-        // Right-side indicator/action button
-        let rightSide;
-        if (canEdit && key !== 'birthday_campaign') {
-          rightSide = `<button class="kpi-manual-btn" onclick="openEventSheet()">✏️ ${item.actual || 'Enter'}</button>`;
-        } else if (key === 'birthday_campaign') {
-          // Read-only: no edit; show admin-verified tag
-          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Admin Audit</span>`;
-        } else if (isManualMgmt) {
-          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);">Admin entry</span>`;
-        } else if (isAutoClaims) {
-          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Auto count</span>`;
-        } else if (item.source && item.source.startsWith('manual')) {
-          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);">Manual</span>`;
-        } else if (item.source === 'agent_self_report') {
-          rightSide = `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Self-report</span>`;
-        } else {
-          rightSide = `<span class="kpi-item-pct" style="color:${col}">${(item.pct||0).toFixed(0)}%</span>`;
-        }
+        const isManual = item.source === 'manual';
+        const canEdit  = item.input_role === 'agent';
 
         return `<div class="kpi-item-row">
           <div>
             <div class="kpi-item-lbl">${item.label}</div>
-            <div class="kpi-item-sub">${subText}</div>
+            <div class="kpi-item-sub">${
+              item.target != null
+                ? `${item.actual ?? '—'} / ${item.target} · ${(item.pct||0).toFixed(1)}%`
+                : `Score: ${item.actual ?? '—'} pts`
+            }</div>
             ${item.target != null ? `<div class="kpi-item-bar-bg"><div class="kpi-item-bar-fill" style="width:${barW}%;background:${col}"></div></div>` : ''}
           </div>
-          <div>${rightSide}</div>
+          <div>
+            ${canEdit
+              ? key === 'birthday_campaign'
+                ? `<button class="kpi-manual-btn" onclick="openBdaySheet()">🎂 ${item.actual != null ? item.actual : 'Enter'}</button>`
+                : `<button class="kpi-manual-btn" onclick="openEventSheet()">✏️ ${item.actual || 'Enter'}</button>`
+              : isManual
+                ? `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);">Manual</span>`
+                : item.source === 'agent_self_report'
+                  ? `<span style="font-family:var(--mono);font-size:8px;color:var(--blue);">Self-report</span>`
+                  : `<span class="kpi-item-pct" style="color:${col}">${(item.pct||0).toFixed(0)}%</span>`
+            }
+          </div>
           <div class="kpi-item-score" style="color:${col}">${(item.score||0).toFixed(2)}<span style="font-family:var(--mono);font-size:7px;color:var(--muted)">/${(item.max_score||0).toFixed(2)}</span></div>
         </div>`;
       }).join('')}
@@ -2846,57 +2689,8 @@ const CAMP_STATUS_KEY = () => {
 };
 
 function getCampStatuses() {
-  // ── BRIDGE: merge two storage formats ───────────────────────────────────
-  // Format 1 (agent self-mark, this device):  camp_status_{month}_{agent}
-  //                                            → {"campId_debtorCode": {status, remark, ts}}
-  // Format 2 (Gist sync, all devices):         camp_claim_{monthSlug}_{agent}_{campId}_{debtorCode}
-  //                                            → {ts, bulk, remark, ...}
-  //
-  // Agent's own marks (Format 1) take priority. GistSync claims (Format 2)
-  // fill in the rest. This makes Camps tab show ✓ Delivered on agent's phone
-  // after admin bulk-marks and pushes to Gist.
-  const merged = {};
-  const month  = DATA?.current_month || '';
-  const slug   = month.replace(' ','');
-  const agent  = currentAgent || '';
-
-  // 1. Seed from Format 2 (camp_claim_*) — read all claim keys for this agent+month
-  if (slug && agent) {
-    const prefix = `camp_claim_${slug}_${agent}_`;
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (!k || !k.startsWith(prefix)) continue;
-        // Key shape: camp_claim_{slug}_{agent}_{campId}_{debtorCode}
-        // Strip prefix → "{campId}_{debtorCode}"
-        const tail = k.slice(prefix.length);
-        // campId may itself contain underscores, but debtorCode is the LAST segment
-        const lastUnderscore = tail.lastIndexOf('_');
-        if (lastUnderscore < 0) continue;
-        const campId     = tail.slice(0, lastUnderscore);
-        const debtorCode = tail.slice(lastUnderscore + 1);
-        let val = {};
-        try { val = JSON.parse(localStorage.getItem(k) || '{}'); } catch {}
-        merged[`${campId}_${debtorCode}`] = {
-          status: 'delivered',               // camp_claim_* implies delivered/claimed
-          remark: val.remark || '',
-          ts    : val.ts || '',
-          source: 'gist',                    // marker for debugging
-          bulk  : !!val.bulk
-        };
-      }
-    } catch(e) {}
-  }
-
-  // 2. Overlay Format 1 (camp_status_*) — agent's own marks win on conflict
-  try {
-    const own = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}');
-    Object.entries(own).forEach(([k, v]) => {
-      merged[k] = { ...v, source: 'self' };
-    });
-  } catch(e) {}
-
-  return merged;
+  try { return JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); }
+  catch(e) { return {}; }
 }
 
 function getCampStatus(campId, debtorCode) {
@@ -2904,44 +2698,23 @@ function getCampStatus(campId, debtorCode) {
 }
 
 function setCampStatus(campId, debtorCode, status) {
-  // IMPORTANT: read from OWN storage only (not the bridged getCampStatuses),
-  // otherwise we'd write Gist-sourced entries back into our self-storage.
-  let own = {};
-  try { own = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); } catch {}
+  const all    = getCampStatuses();
   const key    = `${campId}_${debtorCode}`;
-  const remark = own[key]?.remark || '';   // preserve existing remark
-  own[key] = { status, remark, ts: new Date().toISOString(), agent: currentAgent };
-  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(own)); } catch(e) {}
-
-  // ── Sync "delivered" status to Gist via camp_claim_* so admin/other devices see it
-  if (status === 'delivered' && typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
-    const claimData = { ts: own[key].ts, remark, source: 'agent_mark' };
-    GistSync.saveClaim(DATA?.current_month||'', currentAgent, campId, debtorCode, claimData).catch(()=>{});
-  }
-  // ── If agent un-marks (changes from delivered → something else), remove the Gist claim
-  //    so admin audit doesn't keep showing it as delivered.
-  else if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
-    // Only remove if there was a prior delivered claim from this agent
-    const slug = (DATA?.current_month||'').replace(' ','');
-    const claimKey = `camp_claim_${slug}_${currentAgent}_${campId}_${debtorCode}`;
-    if (localStorage.getItem(claimKey)) {
-      GistSync.removeClaim(DATA?.current_month||'', currentAgent, campId, debtorCode).catch(()=>{});
-    }
-  }
-
+  const remark = all[key]?.remark || '';   // preserve existing remark
+  all[key] = { status, remark, ts: new Date().toISOString(), agent: currentAgent };
+  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(all)); } catch(e) {}
   renderDebtors();
 }
 
 function saveCampRemark(campId, debtorCode) {
   const inp    = document.getElementById(`remark-${campId}`);
   if (!inp) return;
-  let own = {};
-  try { own = JSON.parse(localStorage.getItem(CAMP_STATUS_KEY()) || '{}'); } catch {}
+  const all    = getCampStatuses();
   const key    = `${campId}_${debtorCode}`;
-  if (!own[key]) own[key] = { status: 'not_in', agent: currentAgent };
-  own[key].remark = inp.value.trim();
-  own[key].ts     = new Date().toISOString();
-  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(own)); } catch(e) {}
+  if (!all[key]) all[key] = { status: 'not_in', agent: currentAgent };
+  all[key].remark = inp.value.trim();
+  all[key].ts     = new Date().toISOString();
+  try { localStorage.setItem(CAMP_STATUS_KEY(), JSON.stringify(all)); } catch(e) {}
   // Visual feedback
   inp.style.borderColor = 'var(--green)';
   setTimeout(() => { inp.style.borderColor = ''; }, 1000);
@@ -3116,41 +2889,14 @@ function renderCamps() {
 
   const camps = Object.values(campMap);
 
-  // ── Populate campaign-name filter chips (all camps this agent has) ──────
-  const nameBar = document.getElementById('camps-name-filter-bar');
-  if (nameBar) {
-    if (camps.length > 1) {
-      nameBar.style.display = 'block';
-      // Build chips
-      const chipHtml = camps.map(c => {
-        const emoji = CAMP_EMOJI[c.type] || '📋';
-        // Shorten name for chip
-        const shortName = (c.name || '').replace(/^🎂\s*/, '').slice(0, 24);
-        const isActive = _campIdFilter === c.id ? 'active' : '';
-        return `<button onclick="setCampIdFilter('${c.id.replace(/'/g,"\\'")}',this)" class="filter-chip ${isActive}">${emoji} ${shortName}</button>`;
-      }).join('');
-      const allActive = _campIdFilter === 'all' ? 'active' : '';
-      nameBar.innerHTML = `<span style="font-family:var(--mono);font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-right:8px;">Camps:</span>
-        <button onclick="setCampIdFilter('all',this)" class="filter-chip ${allActive}">ALL</button>
-        ${chipHtml}`;
-    } else {
-      // Only 1 or 0 camps → hide the chip row (not useful)
-      nameBar.style.display = 'none';
-      _campIdFilter = 'all';
-    }
-  }
-
-  // ── Apply campaign-ID filter (after chips rendered so user can switch) ──
-  const filteredCamps = _campIdFilter === 'all' ? camps : camps.filter(c => c.id === _campIdFilter);
-
-  if (!filteredCamps.length) {
+  if (!camps.length) {
     el.innerHTML = `<div style="text-align:center;padding:40px;font-family:var(--mono);font-size:11px;color:var(--muted);">
       No active campaigns for ${currentAgent}
     </div>`;
     return;
   }
 
-  el.innerHTML = filteredCamps.map(c => {
+  el.innerHTML = camps.map(c => {
     const total     = c.debtors.length;
     const delivered = c.debtors.filter(d => d.visit_status?.status === 'delivered').length;
     const notIn     = c.debtors.filter(d => d.visit_status?.status === 'not_in').length;
@@ -3203,24 +2949,7 @@ function renderCamps() {
             ${g.items.map(d => {
               const phone = (d.phone||'').replace(/\s/g,'');
               const vs    = d.visit_status;
-              // For birthday camps, check multiple possible camp_ids since
-              // admin might have bulk-imported under camp_bday_apr26 while
-              // auto-generated list uses birthday_gift_auto.
-              // Any match (delivered or verified) counts as "sent".
-              let claimData = getCampClaims(currentAgent, c.id, d.debtor_code);
-              if (!claimData && c.type === 'birthday_gift') {
-                // Try alternate birthday camp IDs
-                const monthSlug = (DATA?.current_month||'').replace(' ','');
-                const prefix = `camp_claim_${monthSlug}_${currentAgent}_`;
-                const candidates = Object.keys(localStorage).filter(k =>
-                  k.startsWith(prefix)
-                  && k.endsWith(`_${d.debtor_code}`)
-                  && /_(birthday|bday)[^_]*_/i.test(k)
-                );
-                if (candidates.length) {
-                  try { claimData = JSON.parse(localStorage.getItem(candidates[0]) || 'null'); } catch {}
-                }
-              }
+              const claimData  = getCampClaims(currentAgent, c.id, d.debtor_code);
               const isClaimed  = !!claimData;
               const isFOCt     = c.type==='foc_sample'||c.type==='free_sample'||c.type==='festive_gift'||c.type==='birthday_gift';
               const isBday     = c.type==='birthday_gift';
@@ -3305,83 +3034,10 @@ function getCampClaims(agent, campId, debtorCode) {
   const key = getCampClaimKey(agent, campId, debtorCode);
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
 }
-
-// ── Supabase claim write helpers ────────────────────────────────────────
-// The existing SupabaseSync module (bottom of file) handles READS/pull.
-// These two helpers handle single-claim WRITES when agents click
-// Mark Sent / Claim / Undo on the phone. They keep Supabase and
-// localStorage in sync on every action.
-
-async function _supaUpsertClaim(agent, campId, debtorCode, claimData) {
-  if (!DATA?.current_month) return false;
-  const row = {
-    month: DATA.current_month,
-    agent,
-    camp_id: campId,
-    debtor_code: debtorCode,
-    status: 'delivered',
-    remark: claimData?.remark || '',
-    bulk: false,
-    actor: agent,
-    ts: claimData?.ts || new Date().toISOString()
-  };
-  try {
-    const r = await fetch(`${_SUPA_URL}/rest/v1/claims?on_conflict=month,agent,camp_id,debtor_code`, {
-      method: 'POST',
-      headers: {
-        'apikey': _SUPA_KEY,
-        'Authorization': `Bearer ${_SUPA_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal'
-      },
-      body: JSON.stringify(row)
-    });
-    if (!r.ok) {
-      const err = await r.text();
-      console.warn('[SupaClaim] upsert failed', r.status, err.slice(0,200));
-      return false;
-    }
-    return true;
-  } catch(e) {
-    console.warn('[SupaClaim] network error on upsert', e);
-    return false;
-  }
-}
-
-async function _supaDeleteClaim(agent, campId, debtorCode) {
-  if (!DATA?.current_month) return false;
-  const url = `${_SUPA_URL}/rest/v1/claims`
-    + `?month=eq.${encodeURIComponent(DATA.current_month)}`
-    + `&agent=eq.${encodeURIComponent(agent)}`
-    + `&camp_id=eq.${encodeURIComponent(campId)}`
-    + `&debtor_code=eq.${encodeURIComponent(debtorCode)}`;
-  try {
-    const r = await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        'apikey': _SUPA_KEY,
-        'Authorization': `Bearer ${_SUPA_KEY}`,
-        'Prefer': 'return=minimal'
-      }
-    });
-    if (!r.ok) {
-      const err = await r.text();
-      console.warn('[SupaClaim] delete failed', r.status, err.slice(0,200));
-      return false;
-    }
-    return true;
-  } catch(e) {
-    console.warn('[SupaClaim] network error on delete', e);
-    return false;
-  }
-}
-
 function saveCampClaim(agent, campId, debtorCode, claimData) {
   const key = getCampClaimKey(agent, campId, debtorCode);
   localStorage.setItem(key, JSON.stringify(claimData));
-  // Write to Supabase (fire-and-forget — UI already updated locally)
-  _supaUpsertClaim(agent, campId, debtorCode, claimData).catch(()=>{});
-  // Legacy Gist sync — kept for backward compat but no longer required
+  // Also sync to Gist if configured
   if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
     GistSync.saveClaim(DATA?.current_month||'', agent, campId, debtorCode, claimData).catch(()=>{});
   }
@@ -3389,9 +3045,7 @@ function saveCampClaim(agent, campId, debtorCode, claimData) {
 function removeCampClaim(agent, campId, debtorCode) {
   const key = getCampClaimKey(agent, campId, debtorCode);
   localStorage.removeItem(key);
-  // Delete from Supabase
-  _supaDeleteClaim(agent, campId, debtorCode).catch(()=>{});
-  // Legacy Gist
+  // Also remove from Gist if configured
   if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
     GistSync.removeClaim(DATA?.current_month||'', agent, campId, debtorCode).catch(()=>{});
   }
@@ -3399,18 +3053,9 @@ function removeCampClaim(agent, campId, debtorCode) {
 
 // ── Campaign filter state ─────────────────────────────────────────────────
 let _campFilter = 'all';
-let _campIdFilter = 'all';  // Filter by specific campaign ID (chip row)
 function setCampFilter(type, btn) {
   _campFilter = type;
-  // Reset campaign-ID filter when changing type filter
-  _campIdFilter = 'all';
   document.querySelectorAll('#camps-filter-bar .filter-chip').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  renderCamps();
-}
-function setCampIdFilter(campId, btn) {
-  _campIdFilter = campId;
-  document.querySelectorAll('#camps-name-filter-bar .filter-chip').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   renderCamps();
 }
@@ -3567,16 +3212,9 @@ function saveBdayGift(debtorCode, month, sent, btn) {
   if (sent) {
     localStorage.setItem(key, '1');
     localStorage.setItem(noteKey, note);
-    // Sync to Supabase — birthday claims use camp_id='birthday_gift_auto'
-    _supaUpsertClaim(currentAgent, 'birthday_gift_auto', debtorCode, {
-      remark: note,
-      ts: new Date().toISOString()
-    }).catch(()=>{});
   } else {
     localStorage.removeItem(key);
     localStorage.removeItem(noteKey);
-    // Remove from Supabase
-    _supaDeleteClaim(currentAgent, 'birthday_gift_auto', debtorCode).catch(()=>{});
   }
   btn.closest('div[style*=fixed]').remove();
   renderDebtors();
@@ -3696,543 +3334,264 @@ async function saveEventCount() {
 // ── Boot ───────────────────────────────────────────────────────────────────
 loadData();
 
-// ── Manual Sync Button ─────────────────────────────────────────────
-// Force a fresh pull from Supabase (bypass session cache) and re-render.
-// Triggered by 🔄 Sync button in header. Used when agent suspects admin
-// pushed new claims or approved audits but local state hasn't refreshed.
-async function manualSync(btn) {
-  const si = document.getElementById('sync-indicator');
-  if (!currentAgent || !DATA?.current_month) {
-    if (si) { si.textContent = '⚠ Not ready'; si.style.color = 'var(--red)'; }
-    return;
-  }
-  const origLabel = btn ? btn.textContent : '';
-  if (btn) { btn.textContent = '⏳ Syncing…'; btn.disabled = true; }
-  if (si)  { si.textContent = 'Pulling…'; si.style.color = 'var(--muted)'; }
-  try {
-    // Force re-sync by clearing the session flag
-    _claimsSyncedForSession = false;
-    await syncClaimsFromSupabase();
-    // Count claims synced (from localStorage now)
-    const monthSlug = DATA.current_month.replace(' ', '');
-    const prefix = `camp_claim_${monthSlug}_${currentAgent}_`;
-    const claimCount = Object.keys(localStorage).filter(k => k.startsWith(prefix)).length;
-    if (si) {
-      si.textContent = `✓ Synced ${claimCount}`;
-      si.style.color = 'var(--green)';
-    }
-    try { if (typeof renderCamps   === 'function') renderCamps();   } catch(e) {}
-    try { if (typeof renderDebtors === 'function') renderDebtors(); } catch(e) {}
-    try { if (typeof renderKPI     === 'function') renderKPI();     } catch(e) {}
-  } catch(e) {
-    if (si) { si.textContent = '⚠ Error'; si.style.color = 'var(--red)'; }
-    console.warn('[manualSync]', e);
-  } finally {
-    if (btn) { btn.textContent = origLabel || '🔄 Sync'; btn.disabled = false; }
-  }
-}
-
+// ── GistSync Module ─────────────────────────────────────────────────
 /**
- * MIRACLE-奇迹 MD Dashboard — Supabase Sync Module
- * Drop-in replacement for GistSync. Same API surface so HTML files need minimal changes.
- *
- * Uses Supabase PostgREST + Realtime. No token rotation, no secret scanner games.
- * The publishable key is designed to be public — safe to embed in HTML.
- *
- * Data model (in Supabase):
- *   claims      (month, agent, camp_id, debtor_code, status, remark, bulk, actor, ts)
- *   flags       (month, agent, debtor_code, reason, ts)
- *   kpi_scores  (month, agent, scores jsonb, updated_at)
- *   audit_log   (id, ts, actor, action, month, details)
- *
- * localStorage keys (unchanged — full backward compatibility):
- *   camp_claim_{slug}_{agent}_{campId}_{debtorCode}
- *   touro_debtor_flags_{agent}
- *   md_scores_{slug}
- *   md_gist_cache        (kept for read paths that still reference it)
- *   md_gist_cache_ts
- *
- * Author: TSA session 21 Apr 2026
+ * MIRACLE-奇迹 MD Dashboard — Gist Sync Module
+ * Stores all agent interactions in a GitHub Gist
+ * Cross-device, permanent, audit trail
+ * 
+ * Setup: Admin sets GIST_ID + GITHUB_PAT in admin.html once
+ * All pages load this module and use GistSync.* functions
  */
 
 const GistSync = (() => {
 
-  // ── Configuration ────────────────────────────────────────────────────
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const CONFIG_KEY = 'md_gist_config';
 
-  const CACHE_KEY    = 'md_gist_cache';
-  const CACHE_TS_KEY = 'md_gist_cache_ts';
-
-  // ── Helpers ──────────────────────────────────────────────────────────
-  function _headers(extra) {
-    return Object.assign({
-      'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json'
-    }, extra || {});
-  }
-
-  function _slug(month) { return (month || '').replace(' ',''); }
-
-  async function _rest(path, opts) {
-    opts = opts || {};
-    const url = `${SUPABASE_URL}/rest/v1/${path}`;
-    try {
-      const r = await fetch(url, {
-        method: opts.method || 'GET',
-        headers: _headers(opts.headers),
-        body: opts.body ? JSON.stringify(opts.body) : undefined
-      });
-      if (!r.ok) {
-        console.warn(`[SupabaseSync] ${opts.method||'GET'} ${path} → ${r.status}`);
-        return { ok:false, status:r.status };
-      }
-      if (r.status === 204) return { ok:true, data:null };
-      const data = await r.json();
-      return { ok:true, data };
-    } catch (e) {
-      console.warn('[SupabaseSync] network error', e);
-      return { ok:false, error:e };
-    }
-  }
-
-  // ── Paginated GET: fetches ALL rows regardless of Supabase's 1000-row default cap.
-  // Uses PostgREST "Range" header for offset-based paging. Stops when the server
-  // returns fewer rows than requested, or when a safety limit is hit.
-  async function _restAll(path, pageSize) {
-    pageSize = pageSize || 1000;
-    const MAX_PAGES = 50;        // hard safety cap = 50,000 rows
-    const all = [];
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const from = page * pageSize;
-      const to   = from + pageSize - 1;
-      try {
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-          method: 'GET',
-          headers: _headers({
-            'Range-Unit': 'items',
-            'Range': `${from}-${to}`,
-            'Prefer': 'count=none'
-          })
-        });
-        if (!r.ok) {
-          console.warn(`[SupabaseSync] paged GET ${path} page ${page} → ${r.status}`);
-          break;
-        }
-        const chunk = await r.json();
-        if (!Array.isArray(chunk) || chunk.length === 0) break;
-        all.push(...chunk);
-        if (chunk.length < pageSize) break;   // last page
-      } catch (e) {
-        console.warn('[SupabaseSync] paged GET error', e);
-        break;
-      }
-    }
-    return { ok:true, data: all };
-  }
-
-  // ── Public: always "configured" — no token rotation ──────────────────
-  function isConfigured() { return true; }
+  // ── Hardcoded fallback — set by admin, works for ALL devices automatically ──
+  // Token scope: gist only (cannot touch code repo — safe to embed)
+  const HARDCODED_GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
+  const HARDCODED_TOKEN   = '%%GITHUB_TOKEN%%';  // Admin replaces this via admin.html
 
   function getConfig() {
-    return { gist_id: 'supabase', token: 'supabase', backend: 'supabase' };
+    // Priority: localStorage (admin override) → hardcoded defaults
+    try {
+      const ls = JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}');
+      return {
+        gist_id: ls.gist_id || HARDCODED_GIST_ID,
+        token:   ls.token   || HARDCODED_TOKEN,
+      };
+    }
+    catch { return { gist_id: HARDCODED_GIST_ID, token: HARDCODED_TOKEN }; }
   }
 
-  function saveConfig() { /* no-op — kept for back-compat */ }
+  function saveConfig(cfg) {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
+    // Note: hardcoded values in HTML are the fallback — localStorage takes priority
+  }
 
-  // ── Cache helpers (kept so existing UI code works) ───────────────────
+  function isConfigured() {
+    const c = getConfig();
+    return !!(c.gist_id && c.token && c.token !== '%%GITHUB_TOKEN%%');
+  }
+
+  // ── Read all data from Gist ─────────────────────────────────────────────
+  async function pull() {
+    const { gist_id, token } = getConfig();
+    if (!gist_id || !token) return null;
+    try {
+      const r = await fetch(`https://api.github.com/gists/${gist_id}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+      });
+      if (!r.ok) return null;
+      const data = await r.json();
+      const result = {};
+      Object.entries(data.files || {}).forEach(([fname, f]) => {
+        try { result[fname.replace('.json','')] = JSON.parse(f.content || '{}'); }
+        catch { result[fname.replace('.json','')] = {}; }
+      });
+      // Cache locally
+      localStorage.setItem('md_gist_cache', JSON.stringify(result));
+      localStorage.setItem('md_gist_cache_ts', Date.now().toString());
+      return result;
+    } catch { return null; }
+  }
+
+  // ── Write a single file to Gist ─────────────────────────────────────────
+  async function push(filename, data) {
+    const { gist_id, token } = getConfig();
+    if (!gist_id || !token) return false;
+    try {
+      const r = await fetch(`https://api.github.com/gists/${gist_id}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          files: { [`${filename}.json`]: { content: JSON.stringify(data, null, 2) } }
+        })
+      });
+      return r.ok;
+    } catch { return false; }
+  }
+
+  // ── Get cached data (fast, no network) ──────────────────────────────────
   function getCache() {
-    try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); }
+    try { return JSON.parse(localStorage.getItem('md_gist_cache') || '{}'); }
     catch { return {}; }
   }
 
   function getCacheAge() {
-    const ts = localStorage.getItem(CACHE_TS_KEY);
+    const ts = localStorage.getItem('md_gist_cache_ts');
     return ts ? (Date.now() - parseInt(ts)) / 1000 : 9999;
   }
 
-  function _setCacheBucket(fileKey, obj) {
-    const cache = getCache();
-    cache[fileKey] = obj;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
-    localStorage.setItem(CACHE_TS_KEY, Date.now().toString());
-  }
-
-  // ── Low-level pull/push (back-compat shims for admin.html + audit) ───
-  // Old callers: GistSync.pull('claims_Apr26') → returns object keyed by "{agent}_{campId}_{debtorCode}"
-  async function pull(fileKey) {
-    if (!fileKey) return null;
-
-    if (fileKey.startsWith('claims_')) {
-      const month = _monthFromSlug(fileKey.replace('claims_',''));
-      const r = await _restAll(`claims?select=*&month=eq.${encodeURIComponent(month)}`);
-      if (!r.ok) return null;
-      const out = {};
-      (r.data||[]).forEach(row => {
-        const k = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
-        out[k] = {
-          ts     : row.ts,
-          remark : row.remark || '',
-          bulk   : !!row.bulk,
-          status : row.status || 'delivered',
-          actor  : row.actor || 'agent'
-        };
-      });
-      _setCacheBucket(fileKey, out);
-      return out;
-    }
-
-    if (fileKey.startsWith('flags_')) {
-      const month = _monthFromSlug(fileKey.replace('flags_',''));
-      const r = await _restAll(`flags?select=*&month=eq.${encodeURIComponent(month)}`);
-      if (!r.ok) return null;
-      const byAgent = {};
-      (r.data||[]).forEach(row => {
-        if (!byAgent[row.agent]) byAgent[row.agent] = {};
-        byAgent[row.agent][row.debtor_code] = {
-          reason: row.reason || '',
-          ts    : row.ts
-        };
-      });
-      _setCacheBucket(fileKey, byAgent);
-      return byAgent;
-    }
-
-    if (fileKey === 'kpi_scores') {
-      const r = await _restAll(`kpi_scores?select=*`);
-      if (!r.ok) return null;
-      const byMonth = {};
-      (r.data||[]).forEach(row => {
-        if (!byMonth[row.month]) byMonth[row.month] = {};
-        byMonth[row.month][row.agent] = row.scores || {};
-      });
-      _setCacheBucket(fileKey, byMonth);
-      return byMonth;
-    }
-
-    return null;
-  }
-
-  // Old callers: GistSync.push('claims_Apr26', dataObj)
-  async function push(fileKey, data) {
-    if (!fileKey) return false;
-
-    if (fileKey.startsWith('claims_')) {
-      const month = _monthFromSlug(fileKey.replace('claims_',''));
-      const rows = Object.entries(data || {}).map(([compKey, v]) => {
-        const parts = compKey.split('_');
-        const agent = parts[0];
-        const debtorCode = parts[parts.length - 1];
-        const campId = parts.slice(1, -1).join('_');
-        return {
-          month, agent, camp_id: campId, debtor_code: debtorCode,
-          status: v.status || 'delivered',
-          remark: v.remark || '',
-          bulk  : !!v.bulk,
-          actor : v.actor || 'agent',
-          ts    : v.ts || new Date().toISOString()
-        };
-      });
-      if (!rows.length) return true;
-      const r = await _rest('claims?on_conflict=month,agent,camp_id,debtor_code', {
-        method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates' }, body: rows
-      });
-      _setCacheBucket(fileKey, data);
-      return r.ok;
-    }
-
-    if (fileKey.startsWith('flags_')) {
-      const month = _monthFromSlug(fileKey.replace('flags_',''));
-      const rows = [];
-      Object.entries(data || {}).forEach(([agent, flagsObj]) => {
-        Object.entries(flagsObj || {}).forEach(([debtorCode, v]) => {
-          rows.push({
-            month, agent, debtor_code: debtorCode,
-            reason: (v && v.reason) || '',
-            ts    : (v && v.ts) || new Date().toISOString()
-          });
-        });
-      });
-      if (!rows.length) return true;
-      const r = await _rest('flags?on_conflict=month,agent,debtor_code', {
-        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
-      });
-      _setCacheBucket(fileKey, data);
-      return r.ok;
-    }
-
-    if (fileKey === 'kpi_scores') {
-      const rows = [];
-      Object.entries(data || {}).forEach(([month, agents]) => {
-        Object.entries(agents || {}).forEach(([agent, scoresObj]) => {
-          rows.push({ month, agent, scores: scoresObj || {}, updated_at: new Date().toISOString() });
-        });
-      });
-      if (!rows.length) return true;
-      const r = await _rest('kpi_scores?on_conflict=month,agent', {
-        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
-      });
-      _setCacheBucket(fileKey, data);
-      return r.ok;
-    }
-
-    return false;
-  }
-
-  // ── Single-claim upsert (sales_dashboard.html main path) ─────────────
+  // ── Campaign Claims ──────────────────────────────────────────────────────
   async function saveClaim(month, agent, campId, debtorCode, claimData) {
-    const slug  = _slug(month);
-    const key   = `${agent}_${campId}_${debtorCode}`;
-    const lsKey = `camp_claim_${slug}_${key}`;
+    const slug = month.replace(' ','');
+    const key  = `${agent}_${campId}_${debtorCode}`;
 
-    // Fire-and-forget localStorage first (instant UX)
+    // 1. Save to localStorage immediately (instant)
+    const lsKey = `camp_claim_${slug}_${key}`;
     localStorage.setItem(lsKey, JSON.stringify(claimData));
 
-    // Upsert to Supabase
-    const row = {
-      month, agent, camp_id: campId, debtor_code: debtorCode,
-      status: claimData.status || 'delivered',
-      remark: claimData.remark || '',
-      bulk  : !!claimData.bulk,
-      actor : claimData.actor || 'agent',
-      ts    : claimData.ts || new Date().toISOString()
-    };
-    _rest('claims?on_conflict=month,agent,camp_id,debtor_code', {
-      method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body:[row]
-    }).catch(()=>{});
-
-    // Update cache bucket
-    const cache = getCache();
-    const fk = `claims_${slug}`;
-    if (!cache[fk]) cache[fk] = {};
-    cache[fk][key] = claimData;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+    // 2. Push to Gist asynchronously (background, non-blocking)
+    if (isConfigured()) {
+      const cache   = getCache();
+      const fileKey = `claims_${slug}`;
+      if (!cache[fileKey]) cache[fileKey] = {};
+      cache[fileKey][key] = claimData;
+      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+      push(fileKey, cache[fileKey]).catch(() => {});  // fire and forget
+    }
   }
 
   async function removeClaim(month, agent, campId, debtorCode) {
-    const slug = _slug(month);
+    const slug = month.replace(' ','');
     const key  = `${agent}_${campId}_${debtorCode}`;
+
+    // Remove from localStorage
     localStorage.removeItem(`camp_claim_${slug}_${key}`);
 
-    _rest(`claims?month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(agent)}&camp_id=eq.${encodeURIComponent(campId)}&debtor_code=eq.${encodeURIComponent(debtorCode)}`, {
-      method: 'DELETE'
-    }).catch(()=>{});
-
-    const cache = getCache();
-    const fk = `claims_${slug}`;
-    if (cache[fk]) {
-      delete cache[fk][key];
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+    // Remove from Gist
+    if (isConfigured()) {
+      const cache   = getCache();
+      const fileKey = `claims_${slug}`;
+      if (cache[fileKey]) {
+        delete cache[fileKey][key];
+        localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+        push(fileKey, cache[fileKey]).catch(() => {});
+      }
     }
   }
 
-  // ── Flags (per-agent bulk write) ─────────────────────────────────────
+  // ── Flags ────────────────────────────────────────────────────────────────
   async function saveFlags(month, agent, flags) {
-    const slug = _slug(month);
+    const slug    = month.replace(' ','');
+    const fileKey = `flags_${slug}`;
+
+    // localStorage
     localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(flags));
 
-    // Replace all flags for this agent+month: delete existing, then insert
-    await _rest(`flags?month=eq.${encodeURIComponent(month)}&agent=eq.${encodeURIComponent(agent)}`, { method:'DELETE' });
-
-    const rows = Object.entries(flags || {}).map(([debtorCode, v]) => ({
-      month, agent, debtor_code: debtorCode,
-      reason: (v && v.reason) || '',
-      ts    : (v && v.ts) || new Date().toISOString()
-    }));
-    if (rows.length) {
-      await _rest('flags', { method:'POST', body: rows });
+    // Gist
+    if (isConfigured()) {
+      const cache = getCache();
+      if (!cache[fileKey]) cache[fileKey] = {};
+      cache[fileKey][agent] = flags;
+      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+      push(fileKey, cache[fileKey]).catch(() => {});
     }
-
-    const cache = getCache();
-    const fk = `flags_${slug}`;
-    if (!cache[fk]) cache[fk] = {};
-    cache[fk][agent] = flags;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
   }
 
-  // ── KPI scores (by month + agent) ────────────────────────────────────
+  // ── KPI Scores ───────────────────────────────────────────────────────────
   async function saveKPIScores(month, scores) {
-    const slug = _slug(month);
+    const slug    = month.replace(' ','');
+    const fileKey = `kpi_scores`;
+
+    // localStorage
     localStorage.setItem(`md_scores_${slug}`, JSON.stringify(scores));
 
-    // scores is { AGENT: {...}, AGENT2: {...}, ... }
-    const rows = Object.entries(scores || {}).map(([agent, s]) => ({
-      month, agent, scores: s || {}, updated_at: new Date().toISOString()
-    }));
-    if (rows.length) {
-      const r = await _rest('kpi_scores?on_conflict=month,agent', {
-        method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body: rows
-      });
-      if (r.ok) console.log(`[SupabaseSync] KPI scores for ${month} saved ✓`);
-    }
-
-    const cache = getCache();
-    if (!cache.kpi_scores) cache.kpi_scores = {};
-    cache.kpi_scores[month] = scores;
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
-  }
-
-  // ── Bulk sync from Supabase → localStorage (page load) ──────────────
-  async function syncToLocal(month, opts) {
-    opts = opts || {};
-    const slug = _slug(month);
-    if (!slug) return { ok:false, reason:'no_month' };
-
-    try {
-      const [claimsRes, flagsRes, kpiRes] = await Promise.all([
-        _restAll(`claims?select=*&month=eq.${encodeURIComponent(month)}`),
-        _restAll(`flags?select=*&month=eq.${encodeURIComponent(month)}`),
-        _restAll(`kpi_scores?select=*&month=eq.${encodeURIComponent(month)}`)
-      ]);
-
-      if (!claimsRes.ok) return { ok:false, reason:'claims_fetch_failed' };
-
-      // Populate camp_claim_* keys for back-compat readers
-      // Populate camp_claim_* keys for back-compat readers.
-      //
-      // CRITICAL: Before writing the fresh data from Supabase, we remove ALL
-      // existing camp_claim_* and bday_gift_* keys for this month. This
-      // guarantees localStorage exactly mirrors Supabase — no leftover keys
-      // for campaigns that were purged (e.g. the camp_1775396958014 cleanup).
-      // Stale keys would otherwise cause agent UI to show claims that no
-      // longer exist on the server.
-      const campPrefix = `camp_claim_${slug}_`;
-      Object.keys(localStorage)
-        .filter(k => k.startsWith(campPrefix))
-        .forEach(k => localStorage.removeItem(k));
-      // Also clear bday_gift_*_{slug} (keys end with `_${slug}`)
-      Object.keys(localStorage)
-        .filter(k => k.startsWith('bday_gift_') && k.endsWith('_' + slug))
-        .forEach(k => localStorage.removeItem(k));
-
-      let claimCount = 0;
-      const claimsObj = {};
-      (claimsRes.data || []).forEach(row => {
-        const compKey = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
-        const lsKey   = `camp_claim_${slug}_${compKey}`;
-        const val = {
-          ts     : row.ts,
-          remark : row.remark || '',
-          bulk   : !!row.bulk,
-          status : row.status || 'delivered',
-          actor  : row.actor || 'agent'
-        };
-        // Only mark as delivered/verified in localStorage — NOT rejected ones
-        if (row.status === 'delivered' || row.status === 'verified') {
-          localStorage.setItem(lsKey, JSON.stringify(val));
-          claimsObj[compKey] = val;
-          claimCount++;
-          // ALSO populate the birthday-popup-specific key when applicable
-          // (birthday_gift_auto + any camp_id matching birthday/bday pattern)
-          if (row.camp_id === 'birthday_gift_auto' || /birthday|bday/i.test(row.camp_id)) {
-            const bdayKey = `bday_gift_${row.agent}_${row.debtor_code}_${slug}`;
-            localStorage.setItem(bdayKey, '1');
-          }
-        }
-        // (rejected status: already cleared above via mass remove — no action needed)
-      });
-
-      // Flags per agent
-      let flagCount = 0;
-      const flagsByAgent = {};
-      (flagsRes.data || []).forEach(row => {
-        if (!flagsByAgent[row.agent]) flagsByAgent[row.agent] = {};
-        flagsByAgent[row.agent][row.debtor_code] = {
-          reason: row.reason || '',
-          ts    : row.ts
-        };
-      });
-      Object.entries(flagsByAgent).forEach(([agent, flags]) => {
-        localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(flags));
-        flagCount++;
-      });
-
-      // KPI scores
-      const kpiByAgent = {};
-      (kpiRes.data || []).forEach(row => {
-        kpiByAgent[row.agent] = row.scores || {};
-      });
-      if (Object.keys(kpiByAgent).length) {
-        localStorage.setItem(`md_scores_${slug}`, JSON.stringify(kpiByAgent));
-      }
-
-      // Refresh shared cache bucket
+    // Gist
+    if (isConfigured()) {
       const cache = getCache();
-      cache[`claims_${slug}`] = claimsObj;
-      cache[`flags_${slug}`]  = flagsByAgent;
-      if (!cache.kpi_scores) cache.kpi_scores = {};
-      cache.kpi_scores[month] = kpiByAgent;
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
-      localStorage.setItem(CACHE_TS_KEY, Date.now().toString());
-
-      console.log(`[SupabaseSync] Pulled ${claimCount} claims, ${flagCount} agents' flags for ${month}`);
-      return { ok:true, claimCount, flagCount };
-    } catch (e) {
-      console.warn('[SupabaseSync] syncToLocal error', e);
-      return { ok:false, reason:'exception', error:e };
+      if (!cache[fileKey]) cache[fileKey] = {};
+      cache[fileKey][month] = scores;
+      localStorage.setItem('md_gist_cache', JSON.stringify(cache));
+      push(fileKey, cache[fileKey]).then(ok => {
+        if (ok) console.log(`[GistSync] KPI scores for ${month} saved to Gist ✓`);
+      }).catch(() => {});
     }
   }
 
-  // ── Back-compat: setup/createGist are no-ops now ─────────────────────
-  async function setup() { return { ok:true, gist_id:'supabase', backend:'supabase' }; }
-  async function createGist() { return { ok:true, gist_id:'supabase', url:SUPABASE_URL }; }
+  // ── Sync from Gist to localStorage (on page load) ────────────────────────
+  async function syncToLocal(month) {
+    if (!isConfigured()) return;
+    const slug = month.replace(' ','');
 
-  // ── Helper: slug → "Apr 26" style month ──────────────────────────────
-  const MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function _monthFromSlug(slug) {
-    // "Apr26" → "Apr 26"
-    const m = /^([A-Za-z]{3})(\d+)$/.exec(slug || '');
-    if (m) return `${m[1]} ${m[2]}`;
-    return slug;
+    // Pull if cache is older than 5 minutes
+    let data;
+    if (getCacheAge() > 300) {
+      data = await pull();
+    } else {
+      data = getCache();
+    }
+    if (!data) return;
+
+    // Claims → localStorage
+    const claims = data[`claims_${slug}`] || {};
+    Object.entries(claims).forEach(([key, val]) => {
+      localStorage.setItem(`camp_claim_${slug}_${key}`, JSON.stringify(val));
+    });
+
+    // Flags → localStorage
+    const flags = data[`flags_${slug}`] || {};
+    Object.entries(flags).forEach(([agent, agentFlags]) => {
+      localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(agentFlags));
+    });
+
+    // KPI scores → localStorage
+    const kpi = data['kpi_scores'] || {};
+    if (kpi[month]) {
+      localStorage.setItem(`md_scores_${slug}`, JSON.stringify(kpi[month]));
+    }
+
+    console.log(`[GistSync] Synced ${Object.keys(claims).length} claims, ${Object.keys(flags).length} agents' flags for ${month}`);
   }
 
-  // ── Realtime subscription (optional, caller opts in) ─────────────────
-  // Fires cb() when claims for this month change on the server
-  let _realtimeClient = null;
-  function subscribeClaims(month, cb) {
+  // ── Setup (called from Admin to configure) ───────────────────────────────
+  async function setup(gistId, token) {
+    // Test the credentials
     try {
-      if (typeof supabase === 'undefined' || !supabase.createClient) {
-        console.warn('[SupabaseSync] realtime unavailable: supabase-js not loaded');
-        return () => {};
-      }
-      if (!_realtimeClient) {
-        _realtimeClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-      }
-      const channel = _realtimeClient
-        .channel(`claims_${_slug(month)}`)
-        .on('postgres_changes',
-          { event: '*', schema: 'public', table: 'claims', filter: `month=eq.${month}` },
-          (payload) => { try { cb(payload); } catch(e){} }
-        )
-        .subscribe();
-      return () => { try { _realtimeClient.removeChannel(channel); } catch(e){} };
-    } catch (e) {
-      console.warn('[SupabaseSync] subscribeClaims failed', e);
-      return () => {};
+      const r = await fetch(`https://api.github.com/gists/${gistId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!r.ok) return { ok: false, error: `HTTP ${r.status} — check Gist ID and token` };
+      saveConfig({ gist_id: gistId, token });
+      return { ok: true };
+    } catch(e) {
+      return { ok: false, error: e.message };
     }
   }
 
-  // ── Audit log (fire-and-forget) ──────────────────────────────────────
-  function logAudit(actor, action, month, details) {
-    _rest('audit_log', {
-      method:'POST',
-      body: [{ actor, action, month: month || null, details: details || {} }]
-    }).catch(()=>{});
+  async function createGist(token, description = 'MIRACLE-奇迹 MD Dashboard Data') {
+    try {
+      const r = await fetch('https://api.github.com/gists', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          description,
+          public: false,
+          files: {
+            'claims_init.json': { content: '{}' },
+            'flags_init.json':  { content: '{}' },
+            'kpi_scores.json':  { content: '{}' },
+          }
+        })
+      });
+      if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+      const data = await r.json();
+      saveConfig({ gist_id: data.id, token });
+      return { ok: true, gist_id: data.id, url: data.html_url };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
   }
 
-  // ── Public API (same shape as GistSync) ──────────────────────────────
   return {
-    isConfigured, getConfig, saveConfig, setup, createGist,
-    pull, push,
+    isConfigured, getConfig, setup, createGist,
+    pull, push, getCache, syncToLocal,
     saveClaim, removeClaim, saveFlags, saveKPIScores,
-    syncToLocal, getCache, getCacheAge,
-    subscribeClaims, logAudit,
-    _backend: 'supabase'
   };
+
 })();
 
-// Back-compat export
+// Export for use in other files
 if (typeof module !== 'undefined') module.exports = GistSync;
 
 </script>

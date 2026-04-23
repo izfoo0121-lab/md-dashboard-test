@@ -787,6 +787,8 @@ async function loadData() {
   try {
     const r = await fetch('dashboard_data.json?v='+Date.now());
     DATA = await r.json();
+    // Apply admin-entered kpi_manual overrides from Supabase
+    await SupabaseKpiSync.apply(DATA);
     window.__DATA__ = DATA;
     CURRENT_DATA = DATA;
     initMonthSelector();
@@ -800,6 +802,83 @@ async function loadData() {
   try { await pullGistData(); } catch(e) { console.warn('[mgmt] gist pull failed:', e); }
 }
 
+// ── SupabaseKpiSync Module ───────────────────────────────────────────────────
+// Fetches admin-entered kpi_manual values (new_accounts, vip_count, event_count)
+// from Supabase and overrides DATA.agents[*].kpi.items[*] + recomputes totals.
+const SupabaseKpiSync = (() => {
+  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+  const FIELD_MAP = {
+    'new_accounts': 'new_accounts',
+    'vip_count':    'vip_count',
+    'event_count':  'event',
+  };
+  function _scoreItem(actual, target, weight) {
+    if (!target || target === 0) return 0;
+    return Math.round(Math.min(actual / target, 1.0) * weight * 100 * 1000) / 1000;
+  }
+  async function fetch_kpi_manual(month) {
+    if (!month) return [];
+    const url = `${SUPABASE_URL}/rest/v1/kpi_manual?select=*&month=eq.${encodeURIComponent(month)}`;
+    try {
+      const r = await fetch(url, {
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      });
+      if (!r.ok) return [];
+      return await r.json();
+    } catch (e) { return []; }
+  }
+  function applyAgentOverride(agentData, row) {
+    if (!agentData || !agentData.kpi || !agentData.kpi.items) return;
+    const items = agentData.kpi.items;
+    Object.entries(FIELD_MAP).forEach(([col, itemKey]) => {
+      const item = items[itemKey];
+      if (!item) return;
+      const newActual = Number(row[col] ?? 0) || 0;
+      const target = Number(item.target || 0);
+      const weight = Number(item.weight || 0);
+      item.actual = newActual;
+      item.pct    = target > 0 ? Math.round(newActual / target * 100 * 10) / 10 : 0;
+      item.score  = _scoreItem(newActual, target, weight);
+      delete item.needs_supabase_fetch;
+    });
+    const sectionScores = {};
+    ['A','B','C','D','E'].forEach(sec => {
+      const secItems = Object.values(items).filter(v => v.section === sec);
+      sectionScores[sec] = {
+        score:     Math.round(secItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000,
+        max_score: Math.round(secItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000,
+      };
+    });
+    agentData.kpi.section_scores = sectionScores;
+    const allItems = Object.values(items);
+    const grandTotal = Math.round(allItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+    const maxTotal = Math.round(allItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+    agentData.kpi.grand_total = grandTotal;
+    agentData.kpi.max_total   = maxTotal;
+    agentData.kpi.grand_pct   = maxTotal > 0 ? Math.round(grandTotal / maxTotal * 100 * 10) / 10 : 0;
+    const abcItems = allItems.filter(v => ['A','B','C'].includes(v.section));
+    const totalABC = Math.round(abcItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+    const maxABC = Math.round(abcItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+    agentData.kpi.total_abc = totalABC;
+    agentData.kpi.max_abc   = maxABC;
+    agentData.kpi.total_pct = maxABC > 0 ? Math.round(totalABC / maxABC * 100 * 10) / 10 : 0;
+  }
+  async function apply(dataObj) {
+    const month = dataObj?.current_month;
+    if (!month) return;
+    const rows = await fetch_kpi_manual(month);
+    if (!rows.length) { console.log(`[SupabaseKpiSync] No kpi_manual rows for ${month}`); return; }
+    let applied = 0;
+    rows.forEach(row => {
+      const agentData = dataObj.agents?.[row.agent];
+      if (agentData) { applyAgentOverride(agentData, row); applied++; }
+    });
+    console.log(`[SupabaseKpiSync] Applied ${applied}/${rows.length} kpi_manual overrides for ${month}`);
+  }
+  return { apply, fetch_kpi_manual };
+})();
+
 async function loadCampaignSection() {
   const r = await fetch('campaigns.json?v=' + Date.now());
   if (!r.ok) return;
@@ -808,26 +887,20 @@ async function loadCampaignSection() {
 }
 
 async function pullGistData() {
-  // Supabase-backed (was Gist). Populates localStorage so render functions
-  // see fresh data. Non-fatal — if anything fails, page still renders.
-  const month = DATA?.current_month || '';
+  if (!GistSync.isConfigured()) return;
+  const month = (DATA?.current_month || '').replace(' ','');
   if (!month) return;
-  try {
-    // 1) Pull claims + flags into localStorage (via SupabaseSync alias)
-    await SupabaseSync.syncToLocal(month);
-    // 2) Pull campaigns.json into touro_campaigns localStorage key
-    //    (renderCampaignsMgmt reads from there)
-    await SupabaseSync.loadCampaignsFromFile();
-    // 3) Pull kpi_manual rows for this month into window.KPI_MANUAL_BY_AGENT
-    //    (renderMonthlySummary uses these for VIP + 开新户口 columns)
-    await SupabaseSync.loadKpiManualForMonth(month);
-    // 4) Re-render the views that depend on claim/flag/kpi state
-    try { renderPendingActions();  } catch(e) {}
-    try { renderBdayAudit();       } catch(e) {}
-    try { renderCampaignsMgmt();   } catch(e) {}
-    try { renderMonthlySummary();  } catch(e) {}
-  } catch(e) {
-    console.warn('[mgmt] Supabase pull failed', e);
+  const gistFlags = await GistSync.pull('flags_' + month);
+  if (gistFlags) {
+    try { localStorage.setItem(FLAGS_KEY, JSON.stringify(gistFlags)); } catch(e) {}
+    renderPendingActions();
+  }
+  const gistClaims = await GistSync.pull('claims_' + month);
+  if (gistClaims) {
+    Object.entries(gistClaims).forEach(([k, v]) => {
+      try { localStorage.setItem('camp_claim_' + month + '_' + k, JSON.stringify(v)); } catch(e) {}
+    });
+    renderBdayAudit();
   }
 }
 
@@ -1125,19 +1198,11 @@ function renderMonthlySummary() {
     const normalPct = sp.tiers?.normal_t1?.pct || 0;
     const maPct     = sp.tiers?.ma?.pct || 0;
 
-    // KPI actuals — manual entries (from Admin → KPI Manual) win when present.
-    // Falls back to auto-count from debtor cards if no manual entry exists.
-    const manual   = (window.KPI_MANUAL_BY_AGENT || {})[agent] || {};
-    const hasManualNewAcc = manual.new_accounts !== undefined && manual.new_accounts !== null;
-    const hasManualVip    = manual.vip_count    !== undefined && manual.vip_count    !== null;
-    const newAcc  = hasManualNewAcc
-      ? manual.new_accounts
-      : (dc.debtors?.filter(d=>d.is_new).length || 0);
+    // KPI actuals — merge live scores
+    const newAcc  = dc.debtors?.filter(d=>d.is_new).length || 0;
     const newAccTgt = kpiItems.new_accounts?.target || 0;
 
-    const vipAct  = hasManualVip
-      ? manual.vip_count
-      : (dc.debtors?.filter(d=>d.vip && d.status==='active').length || 0);
+    const vipAct  = dc.debtors?.filter(d=>d.vip && d.status==='active').length || 0;
     const vipTgt  = kpiItems.vip_count?.target || 0;
 
     const reactAct = dc.reactivation_count || 0;
@@ -1330,267 +1395,38 @@ function exportMonthlyExcel() {
 }
 
 // ── Pending Actions (Flags) ────────────────────────────────────────────────
-// ── GistSync (now Supabase-backed; API kept for back-compat) ──────────
-// This module preserves the GistSync public API so the 15+ call sites
-// elsewhere in this file continue to work unchanged. Internally it talks
-// to Supabase instead of GitHub Gist.
-//
-// Mapping of old → new:
-//   push('flags_' + month, data)      →  upsert rows into flags table
-//   pull('flags_' + month)            →  SELECT rows from flags, rebuild object
-//   push('claims_' + month, data)     →  upsert rows into claims table
-//   pull('claims_' + month)           →  SELECT rows from claims, rebuild object
-//   push('kpi_scores', data)          →  upsert rows into kpi_scores table
-//   pull('kpi_scores')                →  SELECT rows from kpi_scores
-//   isConfigured()                    →  always true (Supabase key is public)
+// ── GistSync ──────────────────────────────────────────────────────────────
 const GistSync = (() => {
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
-  const baseHeaders = {
-    'apikey': SUPABASE_KEY,
-    'Authorization': `Bearer ${SUPABASE_KEY}`,
-    'Content-Type': 'application/json'
-  };
-  function isConfigured() { return true; }
-  function token() { return 'supabase'; }
-
-  // Parse the conventional key format used across the codebase:
-  //   "flags_Apr 26"   → { table:'flags',   month:'Apr 26' }
-  //   "claims_Apr 26"  → { table:'claims',  month:'Apr 26' }
-  //   "kpi_scores"     → { table:'kpi_scores', month:null }
-  function _parseKey(key) {
-    if (!key || typeof key !== 'string') return null;
-    if (key === 'kpi_scores' || key.startsWith('kpi_scores_')) {
-      const m = key === 'kpi_scores' ? null : key.slice('kpi_scores_'.length).replace(/([A-Za-z]{3})(\d+)/, '$1 $2');
-      return { table: 'kpi_scores', month: m };
-    }
-    const m = key.match(/^(flags|claims)_(.+)$/);
-    if (m) {
-      // Month may be passed as "Apr26" (slug) or "Apr 26" — normalise to "Apr 26"
-      const monthSlugLike = m[2];
-      const month = /^([A-Za-z]{3})(\d+)$/.test(monthSlugLike)
-        ? monthSlugLike.replace(/([A-Za-z]{3})(\d+)/, '$1 $2')
-        : monthSlugLike;
-      return { table: m[1], month };
-    }
-    return null;
-  }
-
-  async function _restAll(path) {
-    // Paginated GET up to 5000 rows
-    const all = [];
-    for (let page = 0; page < 5; page++) {
-      const from = page * 1000;
-      const to   = from + 999;
-      try {
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-          headers: { ...baseHeaders, 'Range': `${from}-${to}`, 'Range-Unit': 'items' }
-        });
-        if (!r.ok) { console.warn('[SupaMgmt] GET failed', r.status, path); break; }
-        const rows = await r.json();
-        all.push(...rows);
-        if (rows.length < 1000) break;
-      } catch (e) {
-        console.warn('[SupaMgmt] network error', e);
-        break;
-      }
-    }
-    return all;
-  }
-
-  async function pull(key) {
-    const p = _parseKey(key);
-    if (!p) return null;
-    try {
-      if (p.table === 'flags') {
-        const rows = await _restAll(`flags?select=*&month=eq.${encodeURIComponent(p.month)}`);
-        // Reassemble old Gist-shape: { agent: { debtor_code: { reason, ts } } }
-        const out = {};
-        rows.forEach(r => {
-          if (!out[r.agent]) out[r.agent] = {};
-          out[r.agent][r.debtor_code] = { reason: r.reason || '', ts: r.ts };
-        });
-        return out;
-      }
-      if (p.table === 'claims') {
-        const rows = await _restAll(`claims?select=*&month=eq.${encodeURIComponent(p.month)}`);
-        // Reassemble old Gist-shape: { "agent_campId_debtorCode": {status, ts, remark, bulk, actor} }
-        const out = {};
-        rows.forEach(r => {
-          const key = `${r.agent}_${r.camp_id}_${r.debtor_code}`;
-          out[key] = {
-            ts: r.ts, remark: r.remark || '',
-            bulk: !!r.bulk, status: r.status || 'delivered',
-            actor: r.actor || 'agent'
-          };
-        });
-        return out;
-      }
-      if (p.table === 'kpi_scores') {
-        const filter = p.month ? `?select=*&month=eq.${encodeURIComponent(p.month)}` : '?select=*';
-        const rows = await _restAll(`kpi_scores${filter}`);
-        const out = {};
-        rows.forEach(r => { out[r.agent] = r.scores || {}; });
-        return out;
-      }
-      return null;
-    } catch(e) { console.warn('[SupaMgmt] pull failed', key, e); return null; }
-  }
-
+  const GIST_ID = 'ceb4064c9e2a6d37c6e52c3b02f04a1d';
+  function token() { return localStorage.getItem('md_gist_token') || ''; }
+  function isConfigured() { return !!token(); }
   async function push(key, data) {
-    const p = _parseKey(key);
-    if (!p || !data) return null;
+    if (!isConfigured()) return null;
     try {
-      if (p.table === 'flags') {
-        // Convert { agent: { debtor_code: {reason, ts} } } → row[]
-        const rows = [];
-        Object.entries(data).forEach(([agent, debtors]) => {
-          Object.entries(debtors || {}).forEach(([dcode, meta]) => {
-            rows.push({
-              month: p.month, agent, debtor_code: dcode,
-              reason: meta?.reason || '', ts: meta?.ts || new Date().toISOString()
-            });
-          });
-        });
-        if (!rows.length) return { ok: true };
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/flags?on_conflict=month,agent,debtor_code`, {
-          method: 'POST',
-          headers: { ...baseHeaders, 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify(rows)
-        });
-        return r.ok ? { ok: true } : null;
-      }
-      if (p.table === 'claims') {
-        // Convert { "agent_campId_debtorCode": {status, ts, ...} } → row[]
-        const rows = [];
-        Object.entries(data).forEach(([composite, meta]) => {
-          const firstUnderscore = composite.indexOf('_');
-          const lastUnderscore  = composite.lastIndexOf('_');
-          if (firstUnderscore < 0 || lastUnderscore <= firstUnderscore) return;
-          const agent       = composite.slice(0, firstUnderscore);
-          const debtorCode  = composite.slice(lastUnderscore + 1);
-          const campId      = composite.slice(firstUnderscore + 1, lastUnderscore);
-          rows.push({
-            month: p.month, agent, camp_id: campId, debtor_code: debtorCode,
-            status: meta?.status || 'delivered',
-            remark: meta?.remark || '',
-            bulk  : !!meta?.bulk,
-            actor : meta?.actor || 'mgmt',
-            ts    : meta?.ts || new Date().toISOString()
-          });
-        });
-        if (!rows.length) return { ok: true };
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/claims?on_conflict=month,agent,camp_id,debtor_code`, {
-          method: 'POST',
-          headers: { ...baseHeaders, 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify(rows)
-        });
-        return r.ok ? { ok: true } : null;
-      }
-      if (p.table === 'kpi_scores') {
-        // Convert { agent: {scores...} } → row[]
-        const rows = Object.entries(data).map(([agent, scores]) => ({
-          month: p.month, agent, scores, updated_at: new Date().toISOString()
-        }));
-        if (!rows.length) return { ok: true };
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/kpi_scores?on_conflict=month,agent`, {
-          method: 'POST',
-          headers: { ...baseHeaders, 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify(rows)
-        });
-        return r.ok ? { ok: true } : null;
-      }
-      return null;
-    } catch(e) { console.warn('[SupaMgmt] push failed', key, e); return null; }
-  }
-
-  // ── Bulk sync: pull claims+flags from Supabase, write to localStorage ──
-  // Populates camp_claim_* keys and touro_debtor_flags_* keys so downstream
-  // render functions (renderCampaignsMgmt, renderBdayAudit, renderPendingActions)
-  // see fresh data without change.
-  async function syncToLocal(month) {
-    if (!month) return { ok: false, reason: 'no_month' };
-    const slug = month.replace(' ', '');
-    try {
-      const [claims, flags] = await Promise.all([
-        pull('claims_' + month),
-        pull('flags_' + month)
-      ]);
-
-      // Clear stale camp_claim_{slug}_* keys before repopulating
-      const prefix = `camp_claim_${slug}_`;
-      Object.keys(localStorage).filter(k => k.startsWith(prefix))
-        .forEach(k => localStorage.removeItem(k));
-
-      let claimCount = 0;
-      Object.entries(claims || {}).forEach(([composite, val]) => {
-        // Only delivered/verified persist — rejected drops out
-        if (val?.status === 'delivered' || val?.status === 'verified') {
-          localStorage.setItem(`camp_claim_${slug}_${composite}`, JSON.stringify(val));
-          claimCount++;
-        }
+      const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+        method: 'PATCH',
+        headers: { Authorization: `token ${token()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: { [key + '.json']: { content: JSON.stringify(data, null, 2) } } })
       });
-
-      // Flags — consolidate per-agent objects at the expected key
-      Object.entries(flags || {}).forEach(([agent, debtors]) => {
-        localStorage.setItem(`touro_debtor_flags_${agent}`, JSON.stringify(debtors || {}));
-      });
-      // Unified key used by loadFlags() (no agent suffix)
-      localStorage.setItem('touro_debtor_flags', JSON.stringify(flags || {}));
-
-      console.log(`[SupaMgmt] Synced ${claimCount} claims + ${Object.keys(flags||{}).length} agents' flags for ${month}`);
-      return { ok: true, claimCount };
-    } catch(e) {
-      console.warn('[SupaMgmt] syncToLocal failed', e);
-      return { ok: false, reason: 'exception', error: e };
-    }
+      return r.ok ? await r.json() : null;
+    } catch(e) { console.warn('[GistSync] push failed:', e); return null; }
   }
-
-  // ── Load campaigns.json into localStorage touro_campaigns ─────────
-  // renderCampaignsMgmt reads from localStorage['touro_campaigns'];
-  // this keeps that path working while the file is the source of truth.
-  async function loadCampaignsFromFile() {
+  async function pull(key) {
+    if (!isConfigured()) return null;
     try {
-      const r = await fetch('campaigns.json?v=' + Date.now());
-      if (!r.ok) return { ok: false };
-      const data = await r.json();
-      localStorage.setItem('touro_campaigns', JSON.stringify(data));
-      return { ok: true, count: (data.campaigns || []).length };
-    } catch(e) {
-      console.warn('[SupaMgmt] loadCampaignsFromFile failed', e);
-      return { ok: false, error: e };
-    }
-  }
-
-  // ── Load kpi_manual rows for a given month into window.KPI_MANUAL_BY_AGENT
-  // Used by renderMonthlySummary / team-perf table to show the KPI values
-  // admin enters via Admin → 📊 KPI Manual tab rather than auto-counts.
-  async function loadKpiManualForMonth(month) {
-    if (!month) return { ok: false, reason: 'no_month' };
-    try {
-      const rows = await _restAll(`kpi_manual?select=*&month=eq.${encodeURIComponent(month)}`);
-      const byAgent = {};
-      rows.forEach(r => {
-        byAgent[r.agent] = {
-          new_accounts: r.new_accounts,
-          vip_count:    r.vip_count,
-          updated_at:   r.updated_at,
-          updated_by:   r.updated_by
-        };
+      const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+        headers: { Authorization: `token ${token()}` }
       });
-      window.KPI_MANUAL_BY_AGENT = byAgent;
-      console.log(`[SupaMgmt] Loaded kpi_manual for ${Object.keys(byAgent).length} agents (${month})`);
-      return { ok: true, count: Object.keys(byAgent).length };
-    } catch(e) {
-      console.warn('[SupaMgmt] loadKpiManualForMonth failed', e);
-      return { ok: false, error: e };
-    }
+      if (!r.ok) return null;
+      const g = await r.json();
+      const f = g.files?.[key + '.json'];
+      if (!f) return null;
+      const raw = f.content || (f.raw_url ? await (await fetch(f.raw_url)).text() : null);
+      return raw ? JSON.parse(raw) : null;
+    } catch(e) { console.warn('[GistSync] pull failed:', e); return null; }
   }
-
-  return { push, pull, isConfigured, token, syncToLocal, loadCampaignsFromFile, loadKpiManualForMonth };
+  return { push, pull, isConfigured, token };
 })();
-// Alias — some new call sites may use SupabaseSync explicitly
-const SupabaseSync = GistSync;
 
 // ── Flags ──────────────────────────────────────────────────────────────────
 const FLAGS_KEY = 'touro_debtor_flags';
@@ -1835,9 +1671,7 @@ function renderCampaignsMgmt() {
       // key format: agent_campId_debtorCode
       const parts = key.split('_');
       const debtorCode = parts[parts.length - 1];
-      // Treat 'verified' (audited+approved) as 'delivered' for pool-counting purposes
-      let s = c.status || ((c.ts || c.bulk) ? 'delivered' : 'pending');
-      if (s === 'verified') s = 'delivered';
+      const s = c.status || ((c.ts || c.bulk) ? 'delivered' : 'pending');
       // Priority: delivered > refused > next_visit > not_in > removed > pending
       const priority = { delivered:5, refused:4, next_visit:3, not_in:2, removed:1, pending:0 };
       if (!debtorStatuses[debtorCode] || (priority[s]||0) > (priority[debtorStatuses[debtorCode]]||0)) {
@@ -1884,8 +1718,7 @@ function renderCampaignsMgmt() {
         const claim = claims[key];
         if (!claim) return;
         if (claim.status === 'removed') agRemoved++;
-        // Both 'delivered' and 'verified' count as delivered for the count
-        else if (claim.status === 'delivered' || claim.status === 'verified' || (!claim.status && claim.ts)) agDeliv++;
+        else if (claim.status === 'delivered' || (!claim.status && claim.ts)) agDeliv++;
       });
       const agActive = agDebtors.length - agRemoved;
       const agPct    = agActive > 0 ? Math.min(Math.round(agDeliv / agActive * 100), 100) : 0;
