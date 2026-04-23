@@ -3635,11 +3635,12 @@ async function previewBulkMark() {
     existingClaims = await _fetchExistingClaims(month, campId, agentsToCheck, codesToCheck);
   }
 
-  // Build lookup: already delivered for THIS camp
+  // Build lookup: already-exists claim for THIS camp (any status counts as duplicate)
+  // Previously checked status === 'delivered' only, but DB uses 'verified' / 'claimed' — missed all.
+  // A claim exists if (month, agent, camp_id, debtor_code) row is in DB, regardless of status.
   const alreadyThisCamp = new Set();
   const alreadyOtherCamp = {};  // code → [camp_id, camp_id, ...]
   existingClaims.forEach(c => {
-    if (c.status !== 'delivered') return;
     const key = `${c.agent}|${c.debtor_code.toUpperCase()}`;
     if (c.camp_id === campId) {
       alreadyThisCamp.add(key);
@@ -3687,7 +3688,7 @@ async function previewBulkMark() {
         </div>
         <div style="padding:8px;background:rgba(255,165,0,.08);border:1px solid rgba(255,165,0,.3);border-radius:8px;">
           <div style="font-size:18px;color:var(--accent,#ffa500);">${duplicates.length}</div>
-          <div style="font-size:9px;color:var(--muted);">ALREADY DELIVERED (SKIP)</div>
+          <div style="font-size:9px;color:var(--muted);">ALREADY EXISTS (SKIP)</div>
         </div>
         <div style="padding:8px;background:rgba(255,95,95,.08);border:1px solid rgba(255,95,95,.3);border-radius:8px;">
           <div style="font-size:18px;color:var(--red,#ff5f5f);">${notFound.length}</div>
@@ -3768,8 +3769,8 @@ async function confirmBulkMark() {
     agent: v.agent,
     camp_id: pending.campId,
     debtor_code: v.code,
-    status: 'delivered',
-    remark: pending.remark,
+    status: 'verified',
+    remark: pending.remark || 'Bulk mark',
     bulk: true,
     actor: 'admin',
     ts
