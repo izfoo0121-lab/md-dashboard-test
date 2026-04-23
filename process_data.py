@@ -2339,11 +2339,15 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                     "source": source, "excluded": False,
                 }
 
-            elif key in ("new_accounts", "vip_count"):
+            elif key in ("new_accounts", "vip_count", "event"):
                 # Admin-entered actual via Supabase kpi_manual table.
                 # Dashboard overrides `actual` from Supabase at render time.
-                # Target still uses auto_targets (snapshot-based).
-                target = auto_targets.get(key, 1)
+                # Target still uses auto_targets (snapshot-based) for new_accounts/vip_count,
+                # or per-agent kpi_targets for event.
+                if key == "event":
+                    target = tgt("event", 16)
+                else:
+                    target = auto_targets.get(key, 1)
                 items_out[key] = {
                     "label": label, "section": section, "weight": weight,
                     "actual": 0, "target": target,
@@ -2351,18 +2355,6 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                     "source": source, "excluded": False,
                     "input_role": "admin", "audit_role": "management",
                     "needs_supabase_fetch": True,
-                }
-
-            elif key == "event":
-                actual = manual.get("event", 0) or 0
-                target = tgt("event", 16)
-                sc     = score_item(actual, target, weight)
-                items_out[key] = {
-                    "label": label, "section": section, "weight": weight,
-                    "actual": actual, "target": target,
-                    "score": sc, "max_score": max_score,
-                    "pct": round(actual / target * 100, 1) if target else 0,
-                    "source": source, "excluded": False,
                 }
 
             elif key == "birthday_campaign":
