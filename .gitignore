@@ -14,3 +14,5 @@ Thumbs.db
 
 # Keep dashboard_data.json (this is what Streamlit reads)
 !dashboard_data.json
+targets.json.bak 
+*.bak 
