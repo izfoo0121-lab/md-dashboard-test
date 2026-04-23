@@ -1,6 +1,6 @@
 {
   "_comment": "MD Sales Dashboard — loaded from Supabase",
-  "_loaded_at": "2026-04-23T10:17:04.212617",
+  "_loaded_at": "2026-04-23T12:25:05.520578",
   "agents": {
     "CJ": {
       "is_newbie": false,
