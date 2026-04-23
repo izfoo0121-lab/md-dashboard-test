@@ -306,6 +306,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:1
         <div class="month-badge" id="month-badge">MAR 2026</div>
         <div class="day-prog" id="day-prog">Day — of —</div>
         <div style="font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:2px;" id="last-update">Updated: —</div>
+
+        <!-- Sync / Logout toolbar -->
+        <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px;align-items:center;">
+          <span id="sync-status" style="font-family:var(--mono);font-size:8px;color:var(--muted);">—</span>
+          <button id="btn-manual-sync" onclick="manualSync()" title="Re-sync from Gist and Supabase"
+            style="background:rgba(77,166,255,.1);border:1px solid rgba(77,166,255,.3);color:var(--blue);font-family:var(--mono);font-size:8px;padding:3px 6px;border-radius:6px;cursor:pointer;">🔃 Sync</button>
+          <button onclick="doAgentLogout()" title="Log out (return to PIN gate)"
+            style="background:rgba(255,95,95,.1);border:1px solid rgba(255,95,95,.3);color:var(--red);font-family:var(--mono);font-size:8px;padding:3px 6px;border-radius:6px;cursor:pointer;">↪ Log out</button>
+        </div>
+
         <select id="month-selector-agent" onchange="switchMonth(this.value)"
           style="display:none;margin-top:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
                  color:#fff;font-family:var(--mono);font-size:8px;padding:2px 6px;border-radius:6px;cursor:pointer;">
@@ -497,6 +507,63 @@ window.addEventListener('DOMContentLoaded', ()=>{
     }
   }
 });
+
+// ── Logout ────────────────────────────────────────────────────────────────
+// Clears session + reloads page. PIN gate will show on reload.
+function doAgentLogout() {
+  sessionStorage.removeItem('md_auth');
+  sessionStorage.removeItem('md_agent');
+  location.reload();
+}
+
+// ── Manual Sync ───────────────────────────────────────────────────────────
+// Re-fetches kpi_manual from Supabase + claims/flags from Gist.
+// Used when admin changes values and agent wants fresh data without F5.
+async function manualSync() {
+  const btn = document.getElementById('btn-manual-sync');
+  const stat = document.getElementById('sync-status');
+  if (btn) btn.disabled = true;
+  if (stat) stat.textContent = 'syncing…';
+
+  try {
+    // Re-fetch kpi_manual overrides
+    if (typeof SupabaseKpiSync !== 'undefined' && DATA) {
+      await SupabaseKpiSync.apply(DATA);
+    }
+    // Re-sync Gist
+    if (typeof GistSync !== 'undefined' && GistSync.isConfigured()) {
+      await GistSync.syncToLocal(DATA?.current_month || '');
+    }
+    // Re-render current view
+    try {
+      if (typeof renderCurrentView === 'function') renderCurrentView();
+      else if (typeof renderKPI === 'function' && currentView === 'kpi') renderKPI();
+      else if (typeof renderDebtors === 'function' && currentView === 'debtors') renderDebtors();
+    } catch {}
+    updateSyncStatus();
+  } catch(e) {
+    if (stat) stat.textContent = 'sync failed';
+    console.warn('[manualSync] error:', e);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Sync Status Indicator ─────────────────────────────────────────────────
+// Shows count of locally-cached claims as quick health check.
+function updateSyncStatus() {
+  const stat = document.getElementById('sync-status');
+  if (!stat) return;
+  const month = (DATA?.current_month || '').replace(' ','');
+  let count = 0;
+  try {
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith(`camp_claim_${month}_`)) count++;
+    });
+  } catch {}
+  stat.textContent = `✓ Synced ${count}`;
+  stat.style.color = count > 0 ? 'var(--green)' : 'var(--muted)';
+}
 </script>
 
 <div id="view-debtors" class="view active">
@@ -1056,6 +1123,9 @@ function init() {
 
   // Render group targets immediately
   renderGroupBrandTargets();
+
+  // Update sync status indicator
+  try { updateSyncStatus(); } catch {}
 }
 
 // ── Navigation ─────────────────────────────────────────────────────────────
