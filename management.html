@@ -841,6 +841,24 @@ const SupabaseKpiSync = (() => {
       item.score  = _scoreItem(newActual, target, weight);
       delete item.needs_supabase_fetch;
     });
+    // Also override Newbie Scheme new_accounts (admin value is authoritative)
+    const nb = agentData.newbie_scheme;
+    if (nb && nb.is_newbie) {
+      const adminNewAcc = Number(row.new_accounts ?? 0) || 0;
+      nb.new_accounts = adminNewAcc;
+      const tiers = nb.account_tiers || [];
+      let hitCount = null;
+      let hitReward = 0;
+      [...tiers].sort((a, b) => a.count - b.count).forEach(t => {
+        if (adminNewAcc >= t.count) {
+          hitCount = t.count;
+          hitReward = t.reward;
+        }
+      });
+      nb.acc_tier_hit = hitCount;
+      nb.acc_reward   = hitReward;
+      nb.total_incentive = (nb.ctn_reward || 0) + hitReward;
+    }
     const sectionScores = {};
     ['A','B','C','D','E'].forEach(sec => {
       const secItems = Object.values(items).filter(v => v.section === sec);
