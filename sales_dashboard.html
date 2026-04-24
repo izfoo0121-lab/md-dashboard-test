@@ -3498,6 +3498,42 @@ const GistSync = (() => {
 
   function _slug(month) { return (month || '').replace(' ',''); }
 
+  // Normalize a timestamp value to ISO 8601 format for Supabase timestamptz columns.
+  // Accepts:
+  //   - Already-ISO strings (returned as-is)
+  //   - Date objects (toISOString)
+  //   - Human strings like "24 Apr 14:32" from older saveCampClaim (today's date + parsed time)
+  //   - null/undefined (returns current time as ISO)
+  // Never throws; falls back to now().
+  function _normalizeTs(ts) {
+    if (!ts) return new Date().toISOString();
+    if (ts instanceof Date) return ts.toISOString();
+    if (typeof ts !== 'string') return new Date().toISOString();
+    // Already ISO? (crude but effective — ISO starts with YYYY-MM-DD)
+    if (/^\d{4}-\d{2}-\d{2}T/.test(ts)) return ts;
+    // Human format "24 Apr 14:32" — check BEFORE native Date parse, because
+    // native Date.parse() mis-interprets this as year 2001 in many engines.
+    const m = /^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{1,2}):(\d{2})$/.exec(ts.trim());
+    if (m) {
+      const MONS = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
+      const mo = MONS[m[2]];
+      if (mo !== undefined) {
+        const now = new Date();
+        return new Date(now.getFullYear(), mo, parseInt(m[1]), parseInt(m[3]), parseInt(m[4])).toISOString();
+      }
+    }
+    // Try native Date parse (handles date-only "2026-04-24", RFC strings, etc.)
+    const parsed = new Date(ts);
+    if (!isNaN(parsed.getTime())) {
+      // Sanity check: reject obviously wrong years (pre-2020 indicates parse ambiguity)
+      if (parsed.getFullYear() >= 2020 && parsed.getFullYear() <= 2100) {
+        return parsed.toISOString();
+      }
+    }
+    // Give up; use now() so at least the row inserts
+    return new Date().toISOString();
+  }
+
   // Convert slug like "Apr26" back to "Apr 26" for Supabase queries
   function _monthFromSlug(slug) {
     const m = /^([A-Za-z]{3})(\d+)$/.exec(slug || '');
@@ -3519,8 +3555,17 @@ const GistSync = (() => {
         return { ok:false, status:r.status };
       }
       if (r.status === 204) return { ok:true, data:null };
-      const data = await r.json();
-      return { ok:true, data };
+      // Supabase POST without Prefer:return=representation returns 201 + empty body.
+      // Guard against empty body before attempting JSON parse.
+      const text = await r.text();
+      if (!text) return { ok:true, data:null };
+      try {
+        const data = JSON.parse(text);
+        return { ok:true, data };
+      } catch (e) {
+        console.warn('[SupabaseSync] non-JSON response', { status:r.status, body:text.slice(0,200) });
+        return { ok:true, data:null };
+      }
     } catch (e) {
       console.warn('[SupabaseSync] network error', e);
       return { ok:false, error:e };
@@ -3601,11 +3646,13 @@ const GistSync = (() => {
       (r.data||[]).forEach(row => {
         const k = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
         out[k] = {
-          ts     : row.ts,
-          remark : row.remark || '',
-          bulk   : !!row.bulk,
-          status : row.status || 'delivered',
-          actor  : row.actor || 'agent'
+          ts      : row.ts,
+          remark  : row.remark || '',
+          bulk    : !!row.bulk,
+          status  : row.status || 'delivered',
+          actor   : row.actor || 'agent',
+          count   : (row.count != null) ? row.count : 1,
+          campType: row.camp_type || null
         };
       });
       _setCacheBucket(fileKey, out);
@@ -3655,11 +3702,13 @@ const GistSync = (() => {
         const campId = parts.slice(1, -1).join('_');
         return {
           month, agent, camp_id: campId, debtor_code: debtorCode,
-          status: v.status || 'delivered',
-          remark: v.remark || '',
-          bulk  : !!v.bulk,
-          actor : v.actor || 'agent',
-          ts    : v.ts || new Date().toISOString()
+          status   : v.status || 'delivered',
+          remark   : v.remark || '',
+          bulk     : !!v.bulk,
+          actor    : v.actor || 'agent',
+          ts       : _normalizeTs(v.ts),
+          count    : Number.isFinite(v.count) ? v.count : 1,
+          camp_type: v.campType || v.camp_type || null
         };
       });
       if (!rows.length) return true;
@@ -3678,7 +3727,7 @@ const GistSync = (() => {
           rows.push({
             month, agent, debtor_code: debtorCode,
             reason: (v && v.reason) || '',
-            ts    : (v && v.ts) || new Date().toISOString()
+            ts    : _normalizeTs(v && v.ts)
           });
         });
       });
@@ -3714,17 +3763,24 @@ const GistSync = (() => {
     const key   = `${agent}_${campId}_${debtorCode}`;
     const lsKey = `camp_claim_${slug}_${key}`;
 
-    // Fire-and-forget localStorage first (instant UX)
+    // Fire-and-forget localStorage first (instant UX).
+    // We store the FULL claimData locally — UI reads extra fields like
+    // `count` directly from here, so don't trim it.
     localStorage.setItem(lsKey, JSON.stringify(claimData));
 
-    // Upsert to Supabase
+    // Upsert to Supabase. Schema-aware payload:
+    //   - ts is normalized to ISO (UI may pass "24 Apr 14:32")
+    //   - count defaults to 1 (matches DB default)
+    //   - camp_type is snake_case on the wire but campType in JS
     const row = {
       month, agent, camp_id: campId, debtor_code: debtorCode,
-      status: claimData.status || 'delivered',
-      remark: claimData.remark || '',
-      bulk  : !!claimData.bulk,
-      actor : claimData.actor || 'agent',
-      ts    : claimData.ts || new Date().toISOString()
+      status   : claimData.status || 'delivered',
+      remark   : claimData.remark || '',
+      bulk     : !!claimData.bulk,
+      actor    : claimData.actor || 'agent',
+      ts       : _normalizeTs(claimData.ts),
+      count    : Number.isFinite(claimData.count) ? claimData.count : 1,
+      camp_type: claimData.campType || claimData.camp_type || null
     };
     _rest('claims?on_conflict=month,agent,camp_id,debtor_code', {
       method:'POST', headers:{'Prefer':'resolution=merge-duplicates'}, body:[row]
@@ -3766,7 +3822,7 @@ const GistSync = (() => {
     const rows = Object.entries(flags || {}).map(([debtorCode, v]) => ({
       month, agent, debtor_code: debtorCode,
       reason: (v && v.reason) || '',
-      ts    : (v && v.ts) || new Date().toISOString()
+      ts    : _normalizeTs(v && v.ts)
     }));
     if (rows.length) {
       await _rest('flags', { method:'POST', body: rows });
@@ -3838,11 +3894,13 @@ const GistSync = (() => {
         const compKey = `${row.agent}_${row.camp_id}_${row.debtor_code}`;
         const lsKey   = `camp_claim_${slug}_${compKey}`;
         const val = {
-          ts     : row.ts,
-          remark : row.remark || '',
-          bulk   : !!row.bulk,
-          status : row.status || 'delivered',
-          actor  : row.actor || 'agent'
+          ts      : row.ts,
+          remark  : row.remark || '',
+          bulk    : !!row.bulk,
+          status  : row.status || 'delivered',
+          actor   : row.actor || 'agent',
+          count   : (row.count != null) ? row.count : 1,
+          campType: row.camp_type || null
         };
         localStorage.setItem(lsKey, JSON.stringify(val));
         claimsObj[compKey] = val;
