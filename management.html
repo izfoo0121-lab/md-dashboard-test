@@ -962,27 +962,51 @@ async function loadCampaignSection() {
   // Fetch campaigns.json + all claims for current month in parallel, then render.
   const month = DATA?.current_month || '';
   const [campsRes, supaClaims] = await Promise.all([
-    fetch('campaigns.json?v=' + Date.now()).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch('campaigns.json?v=' + Date.now()).then(r => r.ok ? r.json() : null).catch(() => null),
     fetchCampClaimsForMonth(month),
   ]);
-  CAMP_CLAIMS_CACHE = supaClaims;   // stash for future re-renders
-  CAMPS_CACHE       = campsRes || [];
+  CAMP_CLAIMS_CACHE = supaClaims;
+  // campaigns.json shape is { campaigns: [...] } — unwrap to array
+  if (Array.isArray(campsRes)) {
+    CAMPS_CACHE = campsRes;
+  } else if (campsRes && Array.isArray(campsRes.campaigns)) {
+    CAMPS_CACHE = campsRes.campaigns;
+  } else {
+    CAMPS_CACHE = [];
+  }
+  console.log(`[campProg] Loaded ${CAMPS_CACHE.length} campaigns, ${CAMP_CLAIMS_CACHE.length} claims`);
   renderCampaignsMgmt();
 }
 
-// Single Supabase query that returns ALL claims for this month — used by campaign progress
+// Single Supabase query that returns ALL claims for this month — used by campaign progress.
+// Paginates past 1000-row default limit. Hard cap at 10000 rows to avoid runaway.
 async function fetchCampClaimsForMonth(month) {
   if (!month) return [];
+  const pageSize = 1000;
+  const maxPages = 10;
+  const all = [];
   try {
-    const url = `${SUPABASE_URL}/rest/v1/claims?select=agent,camp_id,debtor_code,status&month=eq.${encodeURIComponent(month)}`;
-    const r = await fetch(url, {
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-    });
-    if (!r.ok) { console.warn(`[campProg] claims fetch HTTP ${r.status}`); return []; }
-    return await r.json();
+    for (let page = 0; page < maxPages; page++) {
+      const from = page * pageSize;
+      const to   = from + pageSize - 1;
+      const url = `${SUPABASE_URL}/rest/v1/claims?select=agent,camp_id,debtor_code,status&month=eq.${encodeURIComponent(month)}&order=ts.desc`;
+      const r = await fetch(url, {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          Range: `${from}-${to}`,
+        }
+      });
+      if (!r.ok) { console.warn(`[campProg] claims fetch HTTP ${r.status} at page ${page}`); break; }
+      const rows = await r.json();
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      all.push(...rows);
+      if (rows.length < pageSize) break;   // last page
+    }
+    return all;
   } catch (e) {
     console.warn('[campProg] claims fetch error:', e.message);
-    return [];
+    return all;
   }
 }
 
@@ -2010,13 +2034,16 @@ function renderCampaignsMgmt() {
   const list    = document.getElementById('campaigns-mgmt-list');
   if (!section || !list) return;
 
-  // Campaigns come from CAMPS_CACHE (populated by loadCampaignSection)
-  // Fallback to localStorage touro_campaigns if cache is empty (first render)
+  // Campaigns come from CAMPS_CACHE (populated by loadCampaignSection).
+  // Fallback to localStorage touro_campaigns if cache is empty.
   let campaigns = Array.isArray(CAMPS_CACHE) && CAMPS_CACHE.length ? CAMPS_CACHE : [];
   if (!campaigns.length) {
     try {
       const raw = localStorage.getItem('touro_campaigns');
-      if (raw) campaigns = JSON.parse(raw).campaigns || [];
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        campaigns = Array.isArray(parsed) ? parsed : (parsed.campaigns || []);
+      }
     } catch(e) {}
   }
 
@@ -2026,19 +2053,22 @@ function renderCampaignsMgmt() {
 
   const AGENTS = Object.keys(DATA?.agents || {});
 
-  // Index claims by camp_id → agent → debtor_code → {status}
-  // Source: CAMP_CLAIMS_CACHE (Supabase rows), populated by loadCampaignSection
-  const claimIdx = {};   // campId → { agent → { debtor_code → status } }
-  (CAMP_CLAIMS_CACHE || []).forEach(r => {
-    if (!r?.camp_id) return;
-    const cid = r.camp_id;
-    const ag  = r.agent || '';
-    const dc  = (r.debtor_code || '').toUpperCase();
-    if (!claimIdx[cid])       claimIdx[cid] = {};
-    if (!claimIdx[cid][ag])   claimIdx[cid][ag] = {};
-    // If multiple rows for same (cid,ag,dc) — last wins (shouldn't happen per RLS but safe)
-    claimIdx[cid][ag][dc] = r.status || 'claimed';
+  // Build debtor name lookup across ALL agents' debtor_cards.
+  // Used to resolve off-list debtor codes → friendly names.
+  const debtorNameMap = {};  // UPPER(code) → "NAME" or "NAME (owner: AGENT)"
+  AGENTS.forEach(ag => {
+    const cards = DATA?.agents?.[ag]?.debtor_cards || {};
+    Object.entries(cards).forEach(([code, d]) => {
+      const key = (code || '').toUpperCase();
+      if (!debtorNameMap[key]) {
+        debtorNameMap[key] = { name: d.company_name || d.name || '', owner: ag };
+      }
+    });
   });
+  function resolveDebtor(code) {
+    const key = (code || '').toUpperCase();
+    return debtorNameMap[key] || null;
+  }
 
   const CONDITION_LABEL = {
     non_buyers_only: 'Non-buyers only',
@@ -2051,9 +2081,7 @@ function renderCampaignsMgmt() {
     promotion:'#1a5c8f', festive_gift:'#6b3fa0', other:'#555'
   };
 
-  // Determine pool per campaign (debtor list)
-  // Birthday uses DATA.birthday_campaign.debtors (authoritative)
-  // Other camps use camp.debtors[]
+  // Get the target pool (authoritative debtor list) for a campaign
   function getCampaignPool(camp) {
     const isBday = camp.type === 'birthday_gift' || camp.id === 'birthday_gift_auto';
     if (isBday) {
@@ -2070,57 +2098,116 @@ function renderCampaignsMgmt() {
     }));
   }
 
-  // DELIVERED statuses: claimed / delivered / verified
-  // EXCLUDED status: excluded (removed from pool)
   const DELIV_STATUSES = new Set(['claimed','delivered','verified']);
 
-  // Compute per-campaign stats
+  // Compute stats per campaign (Option 4: auto-expand pool for FOC/Promo)
   const campStats = active.map(camp => {
-    const pool = getCampaignPool(camp);
-    const campClaims = claimIdx[camp.id] || {};
-
-    // Per-agent rollup
-    const perAgent = {};   // agent → { pool, delivered, excluded, yet }
-    AGENTS.forEach(ag => {
-      perAgent[ag] = { pool: 0, delivered: 0, excluded: 0, yet: 0 };
+    const isBday = camp.type === 'birthday_gift' || camp.id === 'birthday_gift_auto';
+    const pool   = getCampaignPool(camp);
+    const listCodes = new Set(pool.map(d => d.code));
+    // Agent-keyed index of pool entries
+    const poolByAgent = {};
+    pool.forEach(d => {
+      if (!d.agent) return;
+      if (!poolByAgent[d.agent]) poolByAgent[d.agent] = [];
+      poolByAgent[d.agent].push(d);
     });
 
-    pool.forEach(d => {
-      if (!d.agent || !perAgent[d.agent]) return;
-      perAgent[d.agent].pool++;
-      const status = campClaims[d.agent]?.[d.code];
+    // Pull Supabase claims for THIS campaign
+    const campClaims = (CAMP_CLAIMS_CACHE || []).filter(r => r.camp_id === camp.id);
+
+    // Per-agent rollup
+    const perAgent = {};   // agent → { poolCount, delivered, onListDelivered, offListDelivered, excluded, offListCodes:[] }
+    AGENTS.forEach(ag => {
+      perAgent[ag] = {
+        poolCount: (poolByAgent[ag] || []).length,
+        delivered: 0,
+        onListDelivered: 0,
+        offListDelivered: 0,
+        excluded: 0,
+        offListCodes: [],   // array of {code, name, owner}
+      };
+    });
+
+    // First pass — walk through claims, bucket by agent + on/off list
+    campClaims.forEach(r => {
+      const ag = r.agent || '';
+      if (!perAgent[ag]) return;  // unknown agent, skip
+      const code = (r.debtor_code || '').toUpperCase();
+      const status = r.status;
       if (status === 'excluded') {
-        perAgent[d.agent].excluded++;
-      } else if (status && DELIV_STATUSES.has(status)) {
-        perAgent[d.agent].delivered++;
+        perAgent[ag].excluded++;
+        return;
+      }
+      if (!DELIV_STATUSES.has(status)) return;  // ignore rejected/unknown
+
+      perAgent[ag].delivered++;
+      if (listCodes.has(code)) {
+        perAgent[ag].onListDelivered++;
+      } else {
+        perAgent[ag].offListDelivered++;
+        if (!isBday) {   // only track off-list for non-birthday (Option 4 rule)
+          const resolved = resolveDebtor(code);
+          perAgent[ag].offListCodes.push({
+            code: code,
+            name: resolved ? resolved.name : '',
+            owner: resolved ? resolved.owner : '',
+          });
+        }
       }
     });
 
-    // Effective pool (excluded removed) per agent + aggregate
-    Object.values(perAgent).forEach(a => {
-      a.effPool = Math.max(0, a.pool - a.excluded);
-      a.yet     = Math.max(0, a.effPool - a.delivered);
-      a.pct     = a.effPool > 0 ? Math.round(a.delivered / a.effPool * 100) : 0;
+    // Compute agent-level pool/pct
+    Object.entries(perAgent).forEach(([ag, a]) => {
+      if (isBday) {
+        a.effPool = Math.max(0, a.poolCount - a.excluded);
+        // For birthday: don't expand pool with off-list. Off-list birthday is a data concern.
+        a.pct = a.effPool > 0 ? Math.round(a.onListDelivered / a.effPool * 100) : 0;
+        a.yet = Math.max(0, a.effPool - a.onListDelivered);
+      } else {
+        // Option 4: pool expands by off-list deliveries
+        a.effPool = Math.max(0, a.poolCount + a.offListDelivered - a.excluded);
+        a.pct = a.effPool > 0 ? Math.round(a.delivered / a.effPool * 100) : 0;
+        a.yet = Math.max(0, a.effPool - a.delivered);
+      }
     });
 
-    const totalPool      = Object.values(perAgent).reduce((s,a) => s + a.pool, 0);
-    const totalExcluded  = Object.values(perAgent).reduce((s,a) => s + a.excluded, 0);
-    const totalDelivered = Object.values(perAgent).reduce((s,a) => s + a.delivered, 0);
-    const effPool        = Math.max(0, totalPool - totalExcluded);
-    const totalYet       = Math.max(0, effPool - totalDelivered);
-    const pct            = effPool > 0 ? Math.round(totalDelivered / effPool * 100) : 0;
+    // Campaign-level aggregates
+    const totalPoolCount     = pool.length;
+    const totalExcluded      = Object.values(perAgent).reduce((s,a) => s + a.excluded, 0);
+    const totalOnList        = Object.values(perAgent).reduce((s,a) => s + a.onListDelivered, 0);
+    const totalOffList       = Object.values(perAgent).reduce((s,a) => s + a.offListDelivered, 0);
+    const allOffListCodes    = Object.entries(perAgent)
+      .flatMap(([ag, a]) => a.offListCodes.map(c => ({ ...c, agent: ag })));
 
-    return { camp, perAgent, totalPool, totalExcluded, totalDelivered, effPool, totalYet, pct };
+    let effPool, delivered, totalYet, pct;
+    if (isBday) {
+      effPool   = Math.max(0, totalPoolCount - totalExcluded);
+      delivered = totalOnList;  // birthday counts on-list only
+      totalYet  = Math.max(0, effPool - delivered);
+      pct       = effPool > 0 ? Math.round(delivered / effPool * 100) : 0;
+    } else {
+      // Option 4: pool auto-expands
+      effPool   = Math.max(0, totalPoolCount + totalOffList - totalExcluded);
+      delivered = totalOnList + totalOffList;
+      totalYet  = Math.max(0, effPool - delivered);
+      pct       = effPool > 0 ? Math.round(delivered / effPool * 100) : 0;
+    }
+
+    return {
+      camp, isBday, perAgent, totalPoolCount, totalExcluded,
+      totalOnList, totalOffList, allOffListCodes,
+      effPool, delivered, totalYet, pct,
+    };
   });
 
-  // Sort worst → best (ascending pct), but put zero-pool campaigns at the very end
+  // Sort worst → best, zero-pool at end
   campStats.sort((a, b) => {
     if (a.effPool === 0 && b.effPool > 0) return 1;
     if (b.effPool === 0 && a.effPool > 0) return -1;
     return a.pct - b.pct;
   });
 
-  // Deadline warning helper
   function deadlineMeta(deadlineStr) {
     if (!deadlineStr) return '';
     try {
@@ -2133,15 +2220,8 @@ function renderCampaignsMgmt() {
       return `⏰ ${deadlineStr}`;
     } catch(e) { return `⏰ ${deadlineStr}`; }
   }
+  function barColor(pct) { return pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--gold)' : 'var(--accent)'; }
 
-  function barColor(pct) {
-    return pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--gold)' : 'var(--accent)';
-  }
-  function textColor(pct) {
-    return pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--gold)' : 'var(--accent)';
-  }
-
-  // Top bar: Open all / Close all buttons + count
   const headerBar = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-family:var(--mono);font-size:9px;">
       <div style="color:var(--ink3);">Sorted by lowest completion first · ${active.length} active campaign${active.length===1?'':'s'}</div>
@@ -2153,44 +2233,72 @@ function renderCampaignsMgmt() {
       </div>
     </div>`;
 
-  list.innerHTML = headerBar + campStats.map(({ camp, perAgent, totalPool, totalExcluded, totalDelivered, effPool, totalYet, pct }) => {
+  list.innerHTML = headerBar + campStats.map(stats => {
+    const { camp, isBday, perAgent, totalPoolCount, totalExcluded,
+            totalOnList, totalOffList, allOffListCodes,
+            effPool, delivered, totalYet, pct } = stats;
     const accentCol = TYPE_COLORS[camp.type] || 'var(--accent)';
-    const pctCol    = textColor(pct);
-    const barCol    = barColor(pct);
+    const pctCol    = barColor(pct);
     const cardId    = `camp-card-${camp.id}`;
 
-    // Per-agent rows inside body (only agents who have pool > 0 for this camp)
+    // Breakdown line under summary:
+    let breakdown = '';
+    if (isBday) {
+      if (totalExcluded > 0) breakdown = ` <span style="color:#ff8866;">· ${totalExcluded} excluded</span>`;
+    } else {
+      const parts = [];
+      parts.push(`${totalPoolCount} target list`);
+      if (totalOffList > 0)  parts.push(`<span style="color:var(--purple);">+${totalOffList} off-list</span>`);
+      if (totalExcluded > 0) parts.push(`<span style="color:#ff8866;">−${totalExcluded} excluded</span>`);
+      if (parts.length > 1 || totalOffList > 0 || totalExcluded > 0) {
+        breakdown = `<br><span style="color:var(--ink3);font-size:8px;">(${parts.join(' · ')})</span>`;
+      }
+    }
+
+    // Per-agent rows (sorted worst first)
     const agentRows = AGENTS
-      .filter(ag => perAgent[ag].pool > 0)
-      .sort((a, b) => perAgent[a].pct - perAgent[b].pct)  // worst agent first
+      .filter(ag => perAgent[ag].poolCount > 0 || perAgent[ag].delivered > 0)
+      .sort((a, b) => perAgent[a].pct - perAgent[b].pct)
       .map(ag => {
-        const { pool, effPool: agEff, delivered, excluded, yet, pct: agPct } = perAgent[ag];
-        const agCol  = textColor(agPct);
-        const agBar  = barColor(agPct);
-        const yetTxt = yet > 0 ? `<span style="color:var(--accent);">${yet} yet</span>` : `✓`;
-        const excTxt = excluded > 0 ? ` · <span style="color:#ff8866;">${excluded} excl</span>` : '';
-        const poolTxt = excluded > 0 ? `${delivered}/${agEff} (of ${pool})` : `${delivered}/${agEff}`;
+        const a = perAgent[ag];
+        const col  = barColor(a.pct);
+        const yetTxt = a.yet > 0 ? `<span style="color:var(--accent);">${a.yet} yet</span>` : `✓`;
+        const excTxt = a.excluded > 0 ? ` · <span style="color:#ff8866;">${a.excluded} excl</span>` : '';
+        const offTxt = (!isBday && a.offListDelivered > 0)
+          ? ` · <span style="color:var(--purple);">+${a.offListDelivered} off-list</span>` : '';
+        // Display: delivered/effPool (from target list size)
+        const poolTxt = `${a.delivered}/${a.effPool}`;
         return `
         <div style="display:grid;grid-template-columns:64px 1fr 50px;gap:10px;align-items:center;padding:6px 14px;border-top:1px solid var(--border);">
           <div style="font-family:var(--display);font-size:14px;letter-spacing:.04em;">${ag}</div>
           <div>
-            <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-bottom:2px;">${poolTxt} delivered · ${yetTxt}${excTxt}</div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-bottom:2px;">${poolTxt} delivered · ${yetTxt}${excTxt}${offTxt}</div>
             <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
-              <div style="height:100%;width:${agPct}%;background:${agBar};border-radius:2px;transition:width .4s;"></div>
+              <div style="height:100%;width:${a.pct}%;background:${col};border-radius:2px;transition:width .4s;"></div>
             </div>
           </div>
-          <div style="font-family:var(--mono);font-size:11px;font-weight:500;color:${agCol};text-align:right;">${agPct}%</div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:500;color:${col};text-align:right;">${a.pct}%</div>
         </div>`;
       }).join('');
 
-    const excludedNote = totalExcluded > 0
-      ? ` <span style="color:#ff8866;">· ${totalExcluded} excluded</span>`
-      : '';
-    const deadlineHtml = deadlineMeta(camp.deadline);
+    // Off-list drill-down section (only for non-birthday campaigns with off-list deliveries)
+    const offListSection = (!isBday && allOffListCodes.length > 0) ? `
+        <div style="border-top:1px solid var(--border);padding:10px 14px;background:rgba(107,63,160,.04);">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--purple);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">
+            Off-List Deliveries (${allOffListCodes.length})
+          </div>
+          ${allOffListCodes.map(d => {
+            const unknownTag = !d.name ? ` <span style="color:#c8381a;">(unknown debtor)</span>` : '';
+            const ownerTag   = (d.owner && d.owner !== d.agent)
+              ? ` <span style="color:var(--ink3);">(owner: ${d.owner})</span>` : '';
+            return `<div style="font-family:var(--mono);font-size:10px;color:var(--ink3);padding:2px 0;">
+              ${d.agent} → <span style="color:var(--ink2);">${d.code}</span>${d.name ? ' · ' + d.name : ''}${unknownTag}${ownerTag}
+            </div>`;
+          }).join('')}
+        </div>` : '';
 
     return `
     <div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ${accentCol};border-radius:12px;margin-bottom:10px;overflow:hidden;" id="${cardId}">
-      <!-- Clickable header -->
       <div onclick="toggleCampCard('${cardId}')" style="padding:12px 14px;cursor:pointer;user-select:none;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px;">
           <div style="flex:1;min-width:0;">
@@ -2199,7 +2307,7 @@ function renderCampaignsMgmt() {
             </div>
             <div style="font-family:var(--display);font-size:17px;letter-spacing:.04em;">${camp.name || camp.id || ''}</div>
             <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:3px;">
-              ${totalDelivered} of ${effPool} delivered · <span style="color:${totalYet>0?'var(--accent)':'var(--green)'};">${totalYet} yet to deliver</span>${excludedNote} &nbsp;·&nbsp; ${deadlineHtml}
+              ${delivered} of ${effPool} delivered · <span style="color:${totalYet>0?'var(--accent)':'var(--green)'};">${totalYet} yet to deliver</span> &nbsp;·&nbsp; ${deadlineMeta(camp.deadline)}${breakdown}
             </div>
           </div>
           <div style="display:flex;align-items:flex-start;gap:10px;flex-shrink:0;">
@@ -2210,13 +2318,13 @@ function renderCampaignsMgmt() {
           </div>
         </div>
         <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
-          <div style="height:100%;width:${pct}%;background:${barCol};border-radius:3px;transition:width .4s;"></div>
+          <div style="height:100%;width:${pct}%;background:${pctCol};border-radius:3px;transition:width .4s;"></div>
         </div>
       </div>
 
-      <!-- Collapsible body -->
       <div id="${cardId}-body" style="display:none;background:#fbf9f4;">
         ${agentRows || '<div style="padding:14px;font-family:var(--mono);font-size:10px;color:var(--ink3);text-align:center;">No agents have debtors in this campaign pool.</div>'}
+        ${offListSection}
         <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
           <a href="campaign_audit.html" target="_blank"
              style="font-family:var(--mono);font-size:9px;color:var(--purple);text-decoration:none;padding:4px 10px;border:1px solid rgba(107,63,160,.3);border-radius:6px;background:rgba(107,63,160,.05);">
