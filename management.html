@@ -2077,8 +2077,11 @@ function renderBdayAudit() {
     // Priority: live GistSync KPI score → JSON KPI actual
     const liveActual = liveScores[agent]?.birthday_campaign ?? null;
     const actual = liveActual !== null ? liveActual : (kpi.actual ?? null);
+    const excludedCount = kpi.excluded_count || 0;
+    const baseTarget    = kpi.base_target ?? target;
+    const effectiveTarget = Math.max(0, baseTarget - excludedCount);
     const done   = actual !== null;
-    const pct    = target > 0 && actual !== null ? Math.min(actual/target*100, 100) : 0;
+    const pct    = effectiveTarget > 0 && actual !== null ? Math.min(actual/effectiveTarget*100, 100) : 0;
     const col    = pct >= 100 ? '#2a7a4b' : pct >= 60 ? '#c8860a' : '#c8381a';
 
     // Check if MD already approved
@@ -2106,7 +2109,7 @@ function renderBdayAudit() {
         <div>
           <div style="font-family:var(--display);font-size:18px;letter-spacing:.05em;">${agent}</div>
           <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">
-            Birthday debtors: ${target} &nbsp;·&nbsp;
+            Birthday debtors: ${baseTarget}${excludedCount > 0 ? ` → <span style="color:#ff8866;">${effectiveTarget}</span> <span style="color:#ff8866;opacity:.7;">(${excludedCount} excl.)</span>` : ''} &nbsp;·&nbsp;
             ${done
               ? `${mdOverride !== null ? 'MD Adjusted' : 'Self-reported'}: <span style="color:${col};font-weight:600;">${displayActual}</span>`
               : `<span style="color:#c8381a;">Not yet reported</span>`}
