@@ -881,19 +881,88 @@ const SupabaseKpiSync = (() => {
     agentData.kpi.max_abc   = maxABC;
     agentData.kpi.total_pct = maxABC > 0 ? Math.round(totalABC / maxABC * 100 * 10) / 10 : 0;
   }
+  async function fetch_birthday_claims(month) {
+    if (!month) return {};
+    const url = `${SUPABASE_URL}/rest/v1/claims?select=agent,status&month=eq.${encodeURIComponent(month)}&camp_id=eq.birthday_gift_auto`;
+    try {
+      const r = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      if (!r.ok) { console.warn(`[SupabaseKpiSync] birthday claims fetch failed: HTTP ${r.status}`); return {}; }
+      const rows = await r.json();
+      const byAgent = {};
+      rows.forEach(r => {
+        const a = r.agent;
+        if (!byAgent[a]) byAgent[a] = { verified: 0, excluded: 0 };
+        if (r.status === 'excluded') byAgent[a].excluded++;
+        else if (['claimed','delivered','verified'].includes(r.status)) byAgent[a].verified++;
+      });
+      return byAgent;
+    } catch (e) { console.warn('[SupabaseKpiSync] birthday fetch error:', e.message); return {}; }
+  }
+  function applyBirthdayOverride(dataObj, byAgent) {
+    if (!dataObj?.agents) return 0;
+    let applied = 0;
+    Object.entries(dataObj.agents).forEach(([agent, agentData]) => {
+      const bdayItem = agentData?.kpi?.items?.birthday_campaign;
+      if (!bdayItem) return;
+      const counts = byAgent[agent] || { verified: 0, excluded: 0 };
+      if (bdayItem.base_target == null) bdayItem.base_target = Number(bdayItem.target || 0);
+      const baseTarget = Number(bdayItem.base_target || 0);
+      const effectiveTarget = Math.max(0, baseTarget - counts.excluded);
+      bdayItem.excluded_count = counts.excluded;
+      bdayItem.target = effectiveTarget;
+      bdayItem.actual = counts.verified;
+      bdayItem.pct = effectiveTarget > 0 ? Math.round(counts.verified / effectiveTarget * 100 * 10) / 10 : 0;
+      bdayItem.score = _scoreItem(counts.verified, effectiveTarget, Number(bdayItem.weight || 0));
+      delete bdayItem.needs_supabase_fetch;
+      applied++;
+    });
+    return applied;
+  }
+  function recomputeAllTotals(dataObj) {
+    Object.values(dataObj.agents || {}).forEach(agentData => {
+      if (!agentData?.kpi?.items) return;
+      const items = agentData.kpi.items;
+      const sectionScores = {};
+      ['A','B','C','D','E'].forEach(sec => {
+        const secItems = Object.values(items).filter(v => v.section === sec);
+        sectionScores[sec] = {
+          score: Math.round(secItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000,
+          max_score: Math.round(secItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000,
+        };
+      });
+      agentData.kpi.section_scores = sectionScores;
+      const allItems = Object.values(items);
+      const grandTotal = Math.round(allItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+      const maxTotal = Math.round(allItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+      agentData.kpi.grand_total = grandTotal;
+      agentData.kpi.max_total = maxTotal;
+      agentData.kpi.grand_pct = maxTotal > 0 ? Math.round(grandTotal / maxTotal * 100 * 10) / 10 : 0;
+      const abcItems = allItems.filter(v => ['A','B','C'].includes(v.section));
+      const totalABC = Math.round(abcItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+      const maxABC = Math.round(abcItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+      agentData.kpi.total_abc = totalABC;
+      agentData.kpi.max_abc = maxABC;
+      agentData.kpi.total_pct = maxABC > 0 ? Math.round(totalABC / maxABC * 100 * 10) / 10 : 0;
+    });
+  }
   async function apply(dataObj) {
     const month = dataObj?.current_month;
     if (!month) return;
     const rows = await fetch_kpi_manual(month);
-    if (!rows.length) { console.log(`[SupabaseKpiSync] No kpi_manual rows for ${month}`); return; }
-    let applied = 0;
-    rows.forEach(row => {
-      const agentData = dataObj.agents?.[row.agent];
-      if (agentData) { applyAgentOverride(agentData, row); applied++; }
-    });
-    console.log(`[SupabaseKpiSync] Applied ${applied}/${rows.length} kpi_manual overrides for ${month}`);
+    if (rows.length) {
+      let applied = 0;
+      rows.forEach(row => {
+        const agentData = dataObj.agents?.[row.agent];
+        if (agentData) { applyAgentOverride(agentData, row); applied++; }
+      });
+      console.log(`[SupabaseKpiSync] Applied ${applied}/${rows.length} kpi_manual overrides for ${month}`);
+    } else { console.log(`[SupabaseKpiSync] No kpi_manual rows for ${month}`); }
+    const bdayByAgent = await fetch_birthday_claims(month);
+    const bdayApplied = applyBirthdayOverride(dataObj, bdayByAgent);
+    console.log(`[SupabaseKpiSync] Applied birthday claim counts for ${bdayApplied} agents`);
+    if (bdayApplied || rows.length) recomputeAllTotals(dataObj);
   }
-  return { apply, fetch_kpi_manual };
+  return { apply, fetch_kpi_manual, fetch_birthday_claims };
 })();
 
 async function loadCampaignSection() {
