@@ -2469,18 +2469,12 @@ function renderGroupBrandTargets() {
     </div>`;
 
   // ── Right panel summary ────────────────────────────────────────────────
-  const prevMonthCtn     = team.prev_month_ctn            || 0;
-  const curMonthPaid     = team.cur_month_invoiced_paid    || 0;
-  const totalPaidCtn     = prevMonthCtn + curMonthPaid;
-  const totalUnpaidCtn   = team.team_8com_unpaid           || 0;
+  const prevMonthCtn    = team.prev_month_ctn            || 0;
+  const curMonthPaid    = team.cur_month_invoiced_paid    || 0;
+  const totalPaidCtn    = prevMonthCtn + curMonthPaid;
+  const totalUnpaidCtn  = team.team_8com_unpaid           || 0;
   const canggihUnpaidCtn = Object.values(DATA.agents || {})
     .reduce((s, a) => s + (a.aging?.canggih_unpaid_ctn || 0), 0);
-  // Apr 26 销售 = this month invoiced paid + this month's unpaid invoices (excl prev month overdue)
-  const _curMonthStr = (DATA.current_month || '').replace('Apr ','').replace('May ','')
-    .replace('Jun ','').replace('Jul ','').replace('Aug ','').replace('Sep ','')
-    .replace('Oct ','').replace('Nov ','').replace('Dec ','').replace('Jan ','')
-    .replace('Feb ','').replace('Mar ','');
-  // Build month filter: "Apr 26" → "/04/2026", "May 26" → "/05/2026" etc.
   const _MONTH_NUM = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',
                       Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
   const _mParts   = (DATA.current_month || '').split(' ');
@@ -2493,7 +2487,7 @@ function renderGroupBrandTargets() {
               .filter(inv => (inv.invoice_date || '').includes(_mFilter))
               .reduce((ss, inv) => ss + (inv.qty_ctn || 0), 0), 0)
     : 0;
-  const totalSalesCtn = curMonthPaid + _curMonthUnpaid;
+  const totalSalesCtn   = curMonthPaid + _curMonthUnpaid;
 
   const rightPanelHtml = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;">
@@ -3034,12 +3028,8 @@ function renderCamps() {
       acc[d.debtor_code] = getCampClaims(currentAgent, c.id, d.debtor_code);
       return acc;
     }, {});
-    const isExcludedDebtor  = (d) => claimByDebtor[d.debtor_code]?.status === 'excluded';
-    const isDeliveredDebtor = (d) => {
-      const cd = claimByDebtor[d.debtor_code];
-      return cd && cd.status !== 'excluded';
-    };
-
+    const isExcludedDebtor  = d => claimByDebtor[d.debtor_code]?.status === 'excluded';
+    const isDeliveredDebtor = d => { const cd = claimByDebtor[d.debtor_code]; return cd && cd.status !== 'excluded'; };
     const delivered = c.debtors.filter(isDeliveredDebtor).length;
     const excluded  = c.debtors.filter(isExcludedDebtor).length;
     const notIn     = c.debtors.filter(d => d.visit_status?.status === 'not_in').length;
@@ -3049,87 +3039,64 @@ function renderCamps() {
     const effective = Math.max(0, total - excluded);
     const pct       = effective > 0 ? Math.round(delivered/effective*100) : 0;
     const col       = pct >= 100 ? 'var(--green)' : pct >= 60 ? 'var(--accent)' : 'var(--red)';
-
     const groups = [
-      { key:'pending',    label:'⏳ Pending',    items: c.debtors.filter(d => !d.visit_status && !claimByDebtor[d.debtor_code]),                    col:'var(--muted)' },
-      { key:'next_visit', label:'📅 Next Visit', items: c.debtors.filter(d => d.visit_status?.status==='next_visit' && !isExcludedDebtor(d)),        col:'var(--accent)' },
-      { key:'not_in',     label:'📵 Not In',     items: c.debtors.filter(d => d.visit_status?.status==='not_in' && !isExcludedDebtor(d)),            col:'var(--muted)' },
-      { key:'delivered',  label:'✓ Delivered',   items: c.debtors.filter(d => isDeliveredDebtor(d)),                                                col:'var(--green)' },
-      { key:'refused',    label:'❌ Refused',     items: c.debtors.filter(d => d.visit_status?.status==='refused' && !isExcludedDebtor(d)),           col:'var(--red)' },
-      { key:'excluded',   label:'🚫 Excluded',   items: c.debtors.filter(isExcludedDebtor),                                                         col:'#ff8866' },
+      { key:'pending',    label:'\u23F3 Pending',    items: c.debtors.filter(d => !d.visit_status && !claimByDebtor[d.debtor_code]), col:'var(--muted)' },
+      { key:'next_visit', label:'\uD83D\uDCC5 Next Visit', items: c.debtors.filter(d => d.visit_status?.status==='next_visit' && !isExcludedDebtor(d)), col:'var(--accent)' },
+      { key:'not_in',     label:'\uD83D\uDCF5 Not In',     items: c.debtors.filter(d => d.visit_status?.status==='not_in' && !isExcludedDebtor(d)), col:'var(--muted)' },
+      { key:'delivered',  label:'\u2713 Delivered',   items: c.debtors.filter(isDeliveredDebtor), col:'var(--green)' },
+      { key:'refused',    label:'\u274C Refused',     items: c.debtors.filter(d => d.visit_status?.status==='refused' && !isExcludedDebtor(d)), col:'var(--red)' },
+      { key:'excluded',   label:'\uD83D\uDEAB Excluded',   items: c.debtors.filter(isExcludedDebtor), col:'#ff8866' },
     ].filter(g => g.items.length > 0);
-
-    return `<div style="background:var(--card);border:1px solid var(--border);border-radius:14px;margin-bottom:12px;overflow:hidden;">
-      <!-- Camp header -->
-      <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-          <div>
-            <div style="font-family:var(--display);font-size:16px;letter-spacing:.04em;">${CAMP_EMOJI[c.type]||'📋'} ${c.name}</div>
-            <div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">${CAMP_LABEL[c.type]||c.type} · ${total} debtors${excluded > 0 ? ` · ${effective} active` : ''}</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-family:var(--display);font-size:22px;color:${col};">${pct}%</div>
-            <div style="font-family:var(--mono);font-size:8px;color:var(--muted);">${delivered}/${effective} sent${excluded > 0 ? ` · ${excluded} excl.` : ''}</div>
-          </div>
-        </div>
-        <div style="height:6px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden;margin-bottom:8px;">
-          <div style="height:100%;width:${pct}%;background:${col};border-radius:3px;transition:width .4s;"></div>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          ${pending   > 0 ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(255,255,255,.06);color:var(--muted);padding:2px 8px;border-radius:10px;">⏳ ${pending} pending</span>` : ''}
-          ${nextVisit > 0 ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.15);color:var(--accent);padding:2px 8px;border-radius:10px;">📅 ${nextVisit} next visit</span>` : ''}
-          ${notIn     > 0 ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(255,255,255,.06);color:var(--muted);padding:2px 8px;border-radius:10px;">📵 ${notIn} not in</span>` : ''}
-          ${delivered > 0 ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(42,122,75,.2);color:var(--green);padding:2px 8px;border-radius:10px;">✓ ${delivered} delivered</span>` : ''}
-          ${refused   > 0 ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.15);color:var(--red);padding:2px 8px;border-radius:10px;">❌ ${refused} refused</span>` : ''}
-          ${excluded  > 0 ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(255,136,102,.15);color:#ff8866;padding:2px 8px;border-radius:10px;">🚫 ${excluded} excluded</span>` : ''}
-        </div>
-      </div>
-      <!-- Debtor list by status group -->
-      <div style="padding:8px 12px;">
-        ${groups.map(g => `
-          <div style="margin-bottom:8px;">
-            <div style="font-family:var(--mono);font-size:8px;color:${g.col};text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">${g.label}</div>
-            ${g.items.map(d => {
-              const phone      = (d.phone||'').replace(/\s/g,'');
-              const claimData  = claimByDebtor[d.debtor_code];
-              const isClaimed  = !!claimData;
-              const isExcluded = claimData?.status === 'excluded';
-              const isFOCt     = c.type==='foc_sample'||c.type==='free_sample'||c.type==='festive_gift'||c.type==='birthday_gift';
-              const isBday     = c.type==='birthday_gift';
-              const claimLbl   = isExcluded
-                ? '🚫 Excluded'
-                : (isClaimed
-                    ? (isBday?'✔ Sent':isFOCt?'✔ Delivered':'✔ Claimed')
-                    : (isBday?'🎂 Mark Sent':isFOCt?'🎁 Deliver':'🎁 Claim'));
-              const claimBg    = isExcluded ? 'rgba(255,136,102,.2)' : isClaimed ? 'rgba(61,220,132,.2)' : isFOCt ? 'rgba(200,134,10,.15)' : 'rgba(255,255,255,.08)';
-              const claimColor = isExcluded ? '#ff8866' : isClaimed ? 'var(--green)' : isFOCt ? 'var(--gold)' : 'var(--muted)';
-              const claimBdr   = isExcluded ? '#ff8866' : isClaimed ? 'var(--green)' : isFOCt ? 'var(--gold)' : 'var(--border)';
-              const metaLine   = isExcluded
-                ? `${d.debtor_code} · ${unableReasonLabel(claimData.reason)}${claimData.remark ? ` — ${claimData.remark}` : ''}`
-                : `${d.debtor_code}${claimData?.ts ? ` · ${claimData.ts}` : ''}${claimData?.count > 1 ? ` · ${claimData.count}× claims` : ''}`;
-              const rowBg      = isExcluded ? 'rgba(255,136,102,.04)' : isClaimed ? 'rgba(61,220,132,.04)' : 'rgba(255,255,255,.03)';
-              const rowBorder  = isExcluded ? 'rgba(255,136,102,.2)' : isClaimed ? 'rgba(61,220,132,.15)' : 'transparent';
-              const rowOpacity = isExcluded ? '.7' : '1';
-              const showUnableBtn = isFOCt && !isClaimed;
-              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 8px;background:${rowBg};border-radius:8px;margin-bottom:3px;border:1px solid ${rowBorder};opacity:${rowOpacity};">
-                <div style="flex:1;min-width:0;">
-                  <div style="font-family:var(--body);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${isExcluded?'text-decoration:line-through;':''}">${d.company_name||d.debtor_code}</div>
-                  <div style="font-family:var(--mono);font-size:9px;color:var(--muted);">${metaLine}</div>
-                </div>
-                <div style="display:flex;gap:6px;align-items:center;margin-left:8px;">
-                  ${phone ? `<a href="tel:${phone}" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:9px;color:var(--blue);text-decoration:none;">📞</a>` : ''}
-                  ${showUnableBtn ? `<button onclick="openUnableModal(event,'${d.debtor_code}','${c.id}','${(d.company_name||'').replace(/'/g,"\\'")}','${c.type}')"
-                    style="background:rgba(255,136,102,.12);border:1px solid rgba(255,136,102,.3);color:#ff8866;font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;" title="Unable to deliver">🚫</button>` : ''}
-                  <button onclick="toggleCampClaim(event,'${d.debtor_code}','${c.id}','${(d.company_name||'').replace(/'/g,"\\'")}','${(c.promo_detail||'').replace(/'/g,'')}','${c.type}')"
-                    style="background:${claimBg};border:1px solid ${claimBdr};color:${claimColor};font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;">
-                    ${claimLbl}
-                  </button>
-                </div>
-              </div>`;
-            }).join('')}
-          </div>`).join('')}
-      </div>
-    </div>`;
+    return '<div style="background:var(--card);border:1px solid var(--border);border-radius:14px;margin-bottom:12px;overflow:hidden;">' +
+      '<div style="padding:14px 16px;border-bottom:1px solid var(--border);">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">' +
+      '<div><div style="font-family:var(--display);font-size:16px;letter-spacing:.04em;">' + (CAMP_EMOJI[c.type]||'') + ' ' + c.name + '</div>' +
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">' + (CAMP_LABEL[c.type]||c.type) + ' \u00B7 ' + total + ' debtors' + (excluded > 0 ? ' \u00B7 ' + effective + ' active' : '') + '</div></div>' +
+      '<div style="text-align:right;"><div style="font-family:var(--display);font-size:22px;color:' + col + ';">' + pct + '%</div>' +
+      '<div style="font-family:var(--mono);font-size:8px;color:var(--muted);">' + delivered + '/' + effective + ' sent' + (excluded > 0 ? ' \u00B7 ' + excluded + ' excl.' : '') + '</div></div></div>' +
+      '<div style="height:6px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden;margin-bottom:8px;">' +
+      '<div style="height:100%;width:' + pct + '%;background:' + col + ';border-radius:3px;transition:width .4s;"></div></div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+      (pending   > 0 ? '<span style="font-family:var(--mono);font-size:8px;background:rgba(255,255,255,.06);color:var(--muted);padding:2px 8px;border-radius:10px;">\u23F3 ' + pending + ' pending</span>' : '') +
+      (nextVisit > 0 ? '<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.15);color:var(--accent);padding:2px 8px;border-radius:10px;">\uD83D\uDCC5 ' + nextVisit + ' next visit</span>' : '') +
+      (notIn     > 0 ? '<span style="font-family:var(--mono);font-size:8px;background:rgba(255,255,255,.06);color:var(--muted);padding:2px 8px;border-radius:10px;">\uD83D\uDCF5 ' + notIn + ' not in</span>' : '') +
+      (delivered > 0 ? '<span style="font-family:var(--mono);font-size:8px;background:rgba(42,122,75,.2);color:var(--green);padding:2px 8px;border-radius:10px;">\u2713 ' + delivered + ' delivered</span>' : '') +
+      (refused   > 0 ? '<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.15);color:var(--red);padding:2px 8px;border-radius:10px;">\u274C ' + refused + ' refused</span>' : '') +
+      (excluded  > 0 ? '<span style="font-family:var(--mono);font-size:8px;background:rgba(255,136,102,.15);color:#ff8866;padding:2px 8px;border-radius:10px;">\uD83D\uDEAB ' + excluded + ' excluded</span>' : '') +
+      '</div></div>' +
+      '<div style="padding:8px 12px;">' +
+      groups.map(g =>
+        '<div style="margin-bottom:8px;">' +
+        '<div style="font-family:var(--mono);font-size:8px;color:' + g.col + ';text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">' + g.label + '</div>' +
+        g.items.map(d => {
+          const phone      = (d.phone||'').replace(/\s/g,'');
+          const cd         = claimByDebtor[d.debtor_code];
+          const isClaimed  = !!cd;
+          const isExcluded = cd?.status === 'excluded';
+          const isFOCt     = c.type==='foc_sample'||c.type==='free_sample'||c.type==='festive_gift'||c.type==='birthday_gift';
+          const isBday     = c.type==='birthday_gift';
+          const claimLbl   = isExcluded ? '\uD83D\uDEAB Excluded' : (isClaimed ? (isBday?'\u2714 Sent':isFOCt?'\u2714 Delivered':'\u2714 Claimed') : (isBday?'\uD83C\uDF82 Mark Sent':isFOCt?'\uD83C\uDF81 Deliver':'\uD83C\uDF81 Claim'));
+          const claimBg    = isExcluded ? 'rgba(255,136,102,.2)' : isClaimed ? 'rgba(61,220,132,.2)' : isFOCt ? 'rgba(200,134,10,.15)' : 'rgba(255,255,255,.08)';
+          const claimColor = isExcluded ? '#ff8866' : isClaimed ? 'var(--green)' : isFOCt ? 'var(--gold)' : 'var(--muted)';
+          const claimBdr   = isExcluded ? '#ff8866' : isClaimed ? 'var(--green)' : isFOCt ? 'var(--gold)' : 'var(--border)';
+          const metaLine   = isExcluded ? d.debtor_code + ' \u00B7 ' + unableReasonLabel(cd.reason) + (cd.remark ? ' \u2014 ' + cd.remark : '') : d.debtor_code + (cd?.ts ? ' \u00B7 ' + cd.ts : '') + (cd?.count > 1 ? ' \u00B7 ' + cd.count + '\u00D7 claims' : '');
+          const rowBg      = isExcluded ? 'rgba(255,136,102,.04)' : isClaimed ? 'rgba(61,220,132,.04)' : 'rgba(255,255,255,.03)';
+          const rowBorder  = isExcluded ? 'rgba(255,136,102,.2)' : isClaimed ? 'rgba(61,220,132,.15)' : 'transparent';
+          const rowOp      = isExcluded ? '.7' : '1';
+          const showUnable = isFOCt && !isClaimed;
+          const dname      = (d.company_name||'').replace(/'/g,"\\'");
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 8px;background:' + rowBg + ';border-radius:8px;margin-bottom:3px;border:1px solid ' + rowBorder + ';opacity:' + rowOp + ';">' +
+            '<div style="flex:1;min-width:0;">' +
+            '<div style="font-family:var(--body);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' + (isExcluded?'text-decoration:line-through;':'') + '">' + (d.company_name||d.debtor_code) + '</div>' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);">' + metaLine + '</div></div>' +
+            '<div style="display:flex;gap:6px;align-items:center;margin-left:8px;">' +
+            (phone ? '<a href="tel:' + phone + '" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:9px;color:var(--blue);text-decoration:none;">\uD83D\uDCDE</a>' : '') +
+            (showUnable ? '<button onclick="openUnableModal(event,\'' + d.debtor_code + '\',\'' + c.id + '\',\'' + dname + '\',\'' + c.type + '\')" style="background:rgba(255,136,102,.12);border:1px solid rgba(255,136,102,.3);color:#ff8866;font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">\uD83D\uDEAB</button>' : '') +
+            '<button onclick="toggleCampClaim(event,\'' + d.debtor_code + '\',\'' + c.id + '\',\'' + dname + '\',\'' + (c.promo_detail||'').replace(/'/g,'') + '\',\'' + c.type + '\')" style="background:' + claimBg + ';border:1px solid ' + claimBdr + ';color:' + claimColor + ';font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;">' + claimLbl + '</button>' +
+            '</div></div>';
+        }).join('') + '</div>'
+      ).join('') +
+      '</div></div>';
   }).join('');
 }
 
@@ -3330,10 +3297,7 @@ function undoCampClaimFromToast(debtorCode, campId, btn) {
   renderCamps();
 }
 
-// ── Unable to Deliver — Exclusion Flow ─────────────────────────────────────
-// Scope: birthday_gift + FOC types (foc_sample / free_sample / festive_gift)
-// Writes status='excluded' with reason + remark; debtor removed from target.
-// 30s undo pattern mirrors existing claim undo.
+// ── Unable to Deliver — Exclusion Flow ──────────────────────────────────────
 const UNABLE_REASONS = [
   { value: 'closed',      label: 'Shop Closed' },
   { value: 'unreachable', label: 'Unreachable' },
@@ -3353,7 +3317,7 @@ function openUnableModal(event, debtorCode, campId, debtorName, campType) {
   overlay.innerHTML =
     '<div style="background:var(--card);border-radius:20px 20px 0 0;padding:24px 20px 32px;width:100%;max-width:480px;">' +
     '<div style="width:36px;height:4px;background:rgba(255,255,255,.15);border-radius:2px;margin:0 auto 16px;"></div>' +
-    '<div style="font-family:var(--display);font-size:20px;color:#ff8866;margin-bottom:2px;">🚫 Unable to Deliver</div>' +
+    '<div style="font-family:var(--display);font-size:20px;color:#ff8866;margin-bottom:2px;">\uD83D\uDEAB Unable to Deliver</div>' +
     '<div style="font-family:var(--body);font-size:13px;color:var(--text);margin-bottom:2px;">' + debtorName + '</div>' +
     '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:14px;">' + debtorCode + '</div>' +
     '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Reason (required)</div>' +
@@ -3361,9 +3325,9 @@ function openUnableModal(event, debtorCode, campId, debtorName, campType) {
     '<option value="">— Select reason —</option>' + reasonOpts + '</select>' +
     '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Notes (required for Other)</div>' +
     '<input type="text" id="unable-remark" placeholder="e.g. Phone disconnected" style="width:100%;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:var(--body);font-size:13px;padding:11px 12px;box-sizing:border-box;margin-bottom:14px;">' +
-    '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:10px;">⚠ This debtor will be removed from your target list for this campaign.</div>' +
+    '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:10px;">\u26A0 This debtor will be removed from your target list for this campaign.</div>' +
     '<div style="display:flex;gap:10px;">' +
-    '<button onclick="confirmUnable(\'' + debtorCode + '\',\'' + campId + '\',\'' + dn + '\',\'' + campType + '\',this)" style="flex:1;background:#ff8866;border:2px solid #ff8866;color:#1a0a00;font-family:var(--mono);font-size:13px;font-weight:800;padding:14px;border-radius:10px;cursor:pointer;letter-spacing:.05em;">✓ CONFIRM</button>' +
+    '<button onclick="confirmUnable(\'' + debtorCode + '\',\'' + campId + '\',\'' + dn + '\',\'' + campType + '\',this)" style="flex:1;background:#ff8866;border:2px solid #ff8866;color:#1a0a00;font-family:var(--mono);font-size:13px;font-weight:800;padding:14px;border-radius:10px;cursor:pointer;">\u2713 CONFIRM</button>' +
     '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px;padding:13px;border-radius:10px;cursor:pointer;">Cancel</button>' +
     '</div></div>';
   document.body.appendChild(overlay);
@@ -3375,8 +3339,7 @@ function confirmUnable(debtorCode, campId, debtorName, campType, btn) {
   const remark = document.getElementById('unable-remark')?.value?.trim() || '';
   if (!reason) { alert('Please select a reason.'); return; }
   if (reason === 'other' && !remark) { alert('Please specify the reason in the Notes field.'); return; }
-  const ts = new Date().toISOString();
-  const claimData = { status:'excluded', reason, remark, ts, count:1, campType };
+  const claimData = { status:'excluded', reason, remark, ts: new Date().toISOString(), count:1, campType };
   saveCampClaim(currentAgent, campId, debtorCode, claimData);
   btn.closest('div[style*=fixed]').remove();
   showUnableUndoToast(debtorCode, campId, debtorName);
@@ -3389,11 +3352,10 @@ function showUnableUndoToast(debtorCode, campId, debtorName) {
   document.getElementById('camp-undo-toast')?.remove();
   const toast = document.createElement('div');
   toast.id = 'camp-undo-toast';
-  toast.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#ff8866;color:#1a0a00;font-family:var(--mono);font-size:11px;font-weight:700;padding:10px 16px;border-radius:12px;z-index:9998;display:flex;align-items:center;gap:10px;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,.4);`;
-  toast.innerHTML = `<span>🚫 Unable · ${debtorName}</span>
-    <button onclick="undoCampClaimFromToast('${debtorCode}','${campId}',this)"
-      style="background:rgba(0,0,0,.2);border:none;color:#1a0a00;font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;">UNDO</button>
-    <span id="camp-undo-countdown" style="font-size:9px;opacity:.7;">30s</span>`;
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#ff8866;color:#1a0a00;font-family:var(--mono);font-size:11px;font-weight:700;padding:10px 16px;border-radius:12px;z-index:9998;display:flex;align-items:center;gap:10px;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,.4);';
+  toast.innerHTML = '<span>\uD83D\uDEAB Unable \u00B7 ' + debtorName + '</span>' +
+    '<button onclick="undoCampClaimFromToast(\'' + debtorCode + '\',\'' + campId + '\',this)" style="background:rgba(0,0,0,.2);border:none;color:#1a0a00;font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:6px;cursor:pointer;">UNDO</button>' +
+    '<span id="camp-undo-countdown" style="font-size:9px;opacity:.7;">30s</span>';
   document.body.appendChild(toast);
   let secs = 30;
   const ticker = setInterval(() => {
@@ -3413,24 +3375,28 @@ function unableReasonLabel(reasonValue) {
 function toggleBdayGift(debtorCode, debtorName, event) {
   event.stopPropagation();
   const month = (DATA?.current_month||'').replace(' ','');
-  const key = 'bday_gift_' + currentAgent + '_' + debtorCode + '_' + month;
-  const noteKey = 'bday_note_' + currentAgent + '_' + debtorCode + '_' + month;
+  const key = `bday_gift_${currentAgent}_${debtorCode}_${month}`;
+  const noteKey = `bday_note_${currentAgent}_${debtorCode}_${month}`;
   const alreadySent = localStorage.getItem(key) === '1';
   const existingNote = localStorage.getItem(noteKey) || '';
+
+  // Build popup
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
-  overlay.innerHTML =
-    '<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:340px;width:100%;">' +
-    '<div style="font-family:var(--display);font-size:16px;color:var(--purple);margin-bottom:4px;">🎂 Birthday Gift</div>' +
-    '<div style="font-family:var(--body);font-size:13px;color:var(--text);margin-bottom:16px;">' + debtorName + '</div>' +
-    '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">Remark (optional)</div>' +
-    '<textarea id="bday-popup-note" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--body);font-size:13px;padding:10px;resize:none;height:80px;box-sizing:border-box;">' + existingNote + '</textarea>' +
-    '<div style="display:flex;gap:10px;margin-top:16px;">' +
-    (alreadySent
-      ? '<button onclick="saveBdayGift(\'' + debtorCode + '\',\'' + month + '\',false,this)" style="flex:1;background:rgba(255,95,95,.2);border:1px solid rgba(255,95,95,.4);color:var(--red);font-family:var(--mono);font-size:11px;padding:10px;border-radius:8px;cursor:pointer;">✕ Undo Sent</button>'
-      : '<button onclick="saveBdayGift(\'' + debtorCode + '\',\'' + month + '\',true,this)" style="flex:1;background:rgba(61,220,132,.2);border:1px solid rgba(61,220,132,.4);color:var(--green);font-family:var(--mono);font-size:11px;padding:10px;border-radius:8px;cursor:pointer;">✓ Mark Sent</button>') +
-    '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="flex:1;background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px;padding:10px;border-radius:8px;cursor:pointer;">Cancel</button>' +
-    '</div></div>';
+  overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;`;
+  overlay.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:340px;width:100%;">
+      <div style="font-family:var(--display);font-size:16px;color:var(--purple);margin-bottom:4px;">🎂 Birthday Gift</div>
+      <div style="font-family:var(--body);font-size:13px;color:var(--text);margin-bottom:16px;">${debtorName}</div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">Remark (optional)</div>
+      <textarea id="bday-popup-note" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--body);font-size:13px;padding:10px;resize:none;height:80px;box-sizing:border-box;">${existingNote}</textarea>
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        ${alreadySent
+          ? `<button onclick="saveBdayGift('${debtorCode}','${month}',false,this)" style="flex:1;background:rgba(255,95,95,.2);border:1px solid rgba(255,95,95,.4);color:var(--red);font-family:var(--mono);font-size:11px;padding:10px;border-radius:8px;cursor:pointer;">✕ Undo Sent</button>`
+          : `<button onclick="saveBdayGift('${debtorCode}','${month}',true,this)" style="flex:1;background:rgba(61,220,132,.2);border:1px solid rgba(61,220,132,.4);color:var(--green);font-family:var(--mono);font-size:11px;padding:10px;border-radius:8px;cursor:pointer;">✓ Mark Sent</button>`
+        }
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="flex:1;background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px;padding:10px;border-radius:8px;cursor:pointer;">Cancel</button>
+      </div>
+    </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
