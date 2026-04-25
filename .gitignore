@@ -16,3 +16,21 @@ Thumbs.db
 !dashboard_data.json
 targets.json.bak 
 *.bak 
+
+# Local runtime/session/secrets
+*.session
+.env
+.env.*
+*.env
+*.env.txt
+gist_config.json
+
+# Generated logs and scratch output
+*.log
+*_output.txt
+py_diff.txt
+
+# Accidental command artifacts
+/git
+/python
+/26.0.1

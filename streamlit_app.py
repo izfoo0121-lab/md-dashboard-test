@@ -63,7 +63,7 @@ elif page == "admin":
     if html:
         components.html(inject(html, data), height=900, scrolling=True)
 elif page == "campaigns":
-    html = read_file("campaigns.html")
+    html = read_file("campaign_audit.html")
     if html:
         components.html(inject(html, data), height=900, scrolling=True)
 else:

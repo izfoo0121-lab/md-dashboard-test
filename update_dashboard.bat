@@ -93,9 +93,9 @@ if "%MONTH_OVERRIDE%"=="" (echo  Dashboard updated!) else (echo  %MONTH_OVERRIDE
 if not "%FAST_FLAG%"=="" echo  ^(Fast mode - debtor cards from cache^)
 echo ============================================
 echo.
-echo  Agent:      https://izfoo0121-lab.github.io/md-dashboard
-echo  Management: https://izfoo0121-lab.github.io/md-dashboard/management.html
-echo  Admin:      https://izfoo0121-lab.github.io/md-dashboard/admin.html
-echo  Campaigns:  https://izfoo0121-lab.github.io/md-dashboard/campaigns.html
+echo  Agent:      https://izfoo0121-lab.github.io/md-dashboard-test/sales_dashboard.html
+echo  Management: https://izfoo0121-lab.github.io/md-dashboard-test/management.html
+echo  Admin:      https://izfoo0121-lab.github.io/md-dashboard-test/admin.html
+echo  Campaigns:  https://izfoo0121-lab.github.io/md-dashboard-test/campaign_audit.html
 echo.
 pause
