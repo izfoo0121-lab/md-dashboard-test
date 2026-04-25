@@ -1,6 +1,6 @@
 {
   "_comment": "MD Sales Dashboard — loaded from Supabase",
-  "_loaded_at": "2026-04-25T13:18:04.375232",
+  "_loaded_at": "2026-04-25T13:39:58.981907",
   "agents": {
     "KEE": {
       "is_newbie": false,
@@ -3177,6 +3177,11 @@
     "GT138888": "0121"
   },
   "birthday_overrides": {
+    "300-KT193": "add",
+    "300-KT195": "add",
+    "300-KT200": "add",
+    "300-KT202": "add",
+    "300-D323": "add",
     "300-BR031": "remove",
     "300-H030": "remove",
     "300-WK004": "remove",
