@@ -6,6 +6,7 @@
   <meta http-equiv="Expires" content="0">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
 <title>Touro MD Sales Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -2472,9 +2473,9 @@ function renderGroupBrandTargets() {
   const curMonthPaid     = (team.team_normal_ctn || 0) + (team.team_ga_ctn || 0) + (team.team_ma_ctn || 0);
   const totalPaidCtn     = prevMonthCtn + curMonthPaid;
   const totalUnpaidCtn   = team.team_8com_unpaid  || 0;
-  // Sum canggih unpaid across all agents (no team-level field in JSON)
+  // Sum canggih unpaid across all agents — stored in agent.aging (not sales_progression)
   const canggihUnpaidCtn = Object.values(DATA.agents || {})
-    .reduce((s, a) => s + (a.sales_progression?.canggih_unpaid_ctn || 0), 0);
+    .reduce((s, a) => s + (a.aging?.canggih_unpaid_ctn || 0), 0);
   const totalSalesCtn    = team.total_sales_ctn   || 0;
 
   const rightPanelHtml = `
