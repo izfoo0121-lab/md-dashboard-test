@@ -2469,14 +2469,16 @@ function renderGroupBrandTargets() {
     </div>`;
 
   // ── Right panel summary ────────────────────────────────────────────────
-  const prevMonthCtn     = team.prev_month_ctn   || 0;
-  const curMonthPaid     = (team.team_normal_ctn || 0) + (team.team_ga_ctn || 0) + (team.team_ma_ctn || 0);
+  const prevMonthCtn     = team.prev_month_ctn            || 0;
+  const curMonthPaid     = team.cur_month_invoiced_paid    || 0;
   const totalPaidCtn     = prevMonthCtn + curMonthPaid;
-  const totalUnpaidCtn   = team.team_8com_unpaid  || 0;
-  // Sum canggih unpaid across all agents — stored in agent.aging (not sales_progression)
+  const totalUnpaidCtn   = team.team_8com_unpaid           || 0;
+  // Canggih unpaid + canggih paid = this month's total sold CTN (normal+GA+MA, excl 8com)
   const canggihUnpaidCtn = Object.values(DATA.agents || {})
     .reduce((s, a) => s + (a.aging?.canggih_unpaid_ctn || 0), 0);
-  const totalSalesCtn    = team.total_sales_ctn   || 0;
+  const totalSalesCtn    = Object.values(DATA.agents || {})
+    .reduce((s, a) => s + (a.sales_progression?.total_canggih_ctn || 0)
+                        + (a.aging?.canggih_unpaid_ctn || 0), 0);
 
   const rightPanelHtml = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;">
