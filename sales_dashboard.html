@@ -2473,12 +2473,27 @@ function renderGroupBrandTargets() {
   const curMonthPaid     = team.cur_month_invoiced_paid    || 0;
   const totalPaidCtn     = prevMonthCtn + curMonthPaid;
   const totalUnpaidCtn   = team.team_8com_unpaid           || 0;
-  // Canggih unpaid + canggih paid = this month's total sold CTN (normal+GA+MA, excl 8com)
   const canggihUnpaidCtn = Object.values(DATA.agents || {})
     .reduce((s, a) => s + (a.aging?.canggih_unpaid_ctn || 0), 0);
-  const totalSalesCtn    = Object.values(DATA.agents || {})
-    .reduce((s, a) => s + (a.sales_progression?.total_canggih_ctn || 0)
-                        + (a.aging?.canggih_unpaid_ctn || 0), 0);
+  // Apr 26 销售 = this month invoiced paid + this month's unpaid invoices (excl prev month overdue)
+  const _curMonthStr = (DATA.current_month || '').replace('Apr ','').replace('May ','')
+    .replace('Jun ','').replace('Jul ','').replace('Aug ','').replace('Sep ','')
+    .replace('Oct ','').replace('Nov ','').replace('Dec ','').replace('Jan ','')
+    .replace('Feb ','').replace('Mar ','');
+  // Build month filter: "Apr 26" → "/04/2026", "May 26" → "/05/2026" etc.
+  const _MONTH_NUM = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',
+                      Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+  const _mParts   = (DATA.current_month || '').split(' ');
+  const _mFilter  = _mParts.length === 2
+    ? '/' + (_MONTH_NUM[_mParts[0]] || '00') + '/20' + _mParts[1]
+    : '';
+  const _curMonthUnpaid = _mFilter
+    ? Object.values(DATA.agents || {}).reduce((s, a) =>
+        s + (a.aging?.all_unpaid_invoices || [])
+              .filter(inv => (inv.invoice_date || '').includes(_mFilter))
+              .reduce((ss, inv) => ss + (inv.qty_ctn || 0), 0), 0)
+    : 0;
+  const totalSalesCtn = curMonthPaid + _curMonthUnpaid;
 
   const rightPanelHtml = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;">
