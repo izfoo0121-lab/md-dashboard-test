@@ -622,13 +622,6 @@ function updateSyncStatus() {
   </div>
   <div class="filter-row" id="brand-filter-row">
     <span style="font-family:var(--mono);font-size:9px;color:var(--muted);padding:4px 2px;text-transform:uppercase;letter-spacing:.08em;">未购买:</span>
-    <button class="filter-chip active" data-brand="all" onclick="setBrandFilter('all',this)">All</button>
-    <button class="filter-chip" data-brand="IFACE" onclick="setBrandFilter('IFACE',this)">iFACE</button>
-    <button class="filter-chip" data-brand="SUKUN" onclick="setBrandFilter('SUKUN',this)">SUKUN</button>
-    <button class="filter-chip" data-brand="EVO" onclick="setBrandFilter('EVO',this)">EVO</button>
-    <button class="filter-chip" data-brand="BISON" onclick="setBrandFilter('BISON',this)">BISON</button>
-    <button class="filter-chip" data-brand="TR20" onclick="setBrandFilter('TR20',this)">TR20</button>
-    <button class="filter-chip" data-brand="LAM+LWM" onclick="setBrandFilter('LAM+LWM',this)">LAM+LWM</button>
   </div>
   <div id="debtor-list"></div>
   <div class="pagination">
@@ -856,6 +849,18 @@ let currentView = 'debtors';
 let filters = { status: 'all', special: null, type: 'all', brand: 'all' };
 let currentPage = 1;
 const PAGE_SIZE = 12;
+let dropCtnFilter = 'all';
+let dropSkuFilter = 'all';
+let neverBrandFilter = 'IFACE';
+const DROP_BRANDS = ['IFACE','SUKUN','EVO','BISON','TR20','LAM+LWM'];
+const BRAND_ITEMS = {
+  'IFACE':   ['IFACE B','IFACE DB','IFACE M','IFACE R'],
+  'SUKUN':   ['SKNR','SKNW'],
+  'EVO':     ['EVO','DPM EVO'],
+  'BISON':   ['BISON-G','BISON-M','BISON-R'],
+  'TR20':    ['TR-002','TR20'],
+  'LAM+LWM': ['LAM','LWM'],
+};
 
 const BRAND_COLORS = {
   'iFACE':'#4da6ff','SUKUN':'#a78bfa','EVO':'#ff5f5f',
@@ -937,10 +942,15 @@ async function switchMonth(slug) {
            <button class="filter-chip active" onclick="setTypeFilter('all',this)">All (${debtors.length})</button>
            ${types.map(t => `<button class="filter-chip" onclick="setTypeFilter('${t}',this)">${t} (${typeCounts[t]})</button>`).join('')}`;
       }
+      renderBrandFilterRow();
       renderAll();
     } else {
       currentAgent = '';
       filters = { status:'all', special:null, type:'all', brand:'all' };
+      dropCtnFilter = 'all';
+      dropSkuFilter = 'all';
+      neverBrandFilter = 'IFACE';
+      renderBrandFilterRow();
       const listEl = document.getElementById('debtor-list');
       if (listEl) listEl.innerHTML = '';
     }
@@ -1286,6 +1296,9 @@ function selectAgent(agent) {
   currentAgent = agent;
   currentPage  = 1;
   filters = { status:'all', special:null, type:'all', brand:'all' };
+  dropCtnFilter = 'all';
+  dropSkuFilter = 'all';
+  neverBrandFilter = 'IFACE';
 
   // If debtors not loaded yet, fetch from GitHub
   const dc = DATA.agents[agent]?.debtor_cards;
@@ -1333,7 +1346,6 @@ function selectAgent(agent) {
   // Reset all filter rows
   document.querySelectorAll('#status-filter-row .filter-chip').forEach((c,i) => c.classList.toggle('active', i===0));
   document.querySelectorAll('#special-filter-row .filter-chip').forEach(c => c.classList.remove('active'));
-  document.querySelectorAll('#brand-filter-row .filter-chip').forEach((c,i) => c.classList.toggle('active', i===0));
 
   // Rebuild debtor type chips with counts
   const debtors = DATA.agents[agent]?.debtor_cards?.debtors || [];
@@ -1349,6 +1361,7 @@ function selectAgent(agent) {
     `<span style="font-family:var(--mono);font-size:9px;color:var(--muted);padding:4px 2px;text-transform:uppercase;letter-spacing:.08em;">Type:</span>
      <button class="filter-chip active" onclick="setTypeFilter('all',this)">All (${debtors.length})</button>
      ${types.map(t => `<button class="filter-chip" onclick="setTypeFilter('${t}',this)">${t} (${typeCounts[t]})</button>`).join('')}`;
+  renderBrandFilterRow();
 
   renderAll();
 }
@@ -1394,6 +1407,11 @@ function setSpecialFilter(val, el) {
     el.classList.add('active');
     filters.special = val;
     filters.status  = 'all';
+    if (val === 'drop') {
+      dropCtnFilter = 'all';
+      dropSkuFilter = 'all';
+      neverBrandFilter = 'IFACE';
+    }
     document.querySelectorAll('#status-filter-row .filter-chip').forEach((c,i) => c.classList.toggle('active', i===0));
   }
   currentPage = 1;
@@ -1407,17 +1425,199 @@ function setTypeFilter(val, el) {
   renderDebtors();
 }
 function setBrandFilter(val, el) {
-  const wasActive = el.classList.contains('active') && val !== 'all';
+  const wasActive = el.classList.contains('active');
   document.querySelectorAll('#brand-filter-row .filter-chip').forEach(c => c.classList.remove('active'));
   if (wasActive) {
-    document.querySelector('[data-brand="all"]').classList.add('active');
-    filters.brand = 'all';
+    el.classList.add('active');
   } else {
     el.classList.add('active');
-    filters.brand = val;
   }
+  filters.brand = val;
+  neverBrandFilter = val;
   currentPage = 1;
   renderDebtors();
+}
+
+function clearBrandFilter() {
+  filters.brand = 'all';
+  neverBrandFilter = 'IFACE';
+  currentPage = 1;
+  renderBrandFilterRow();
+  renderDebtors();
+}
+
+function renderBrandFilterRow(debtors = null) {
+  const row = document.getElementById('brand-filter-row');
+  if (!row) return;
+  const source = debtors || (currentAgent && DATA ? (DATA.agents[currentAgent]?.debtor_cards?.debtors || []) : []);
+  const neverRows = buildNeverBoughtRows(source);
+  const counts = {};
+  DROP_BRANDS.forEach(brand => { counts[brand] = (neverRows[brand] || []).length; });
+  row.innerHTML =
+    `<span style="font-family:var(--mono);font-size:9px;color:var(--muted);padding:4px 2px;text-transform:uppercase;letter-spacing:.08em;">æœªè´­ä¹°:</span>
+     ${DROP_BRANDS.map(brand =>
+       `<button class="filter-chip ${brand === neverBrandFilter ? 'active' : ''}" data-brand="${brand}" onclick="setBrandFilter('${brand}',this)">${brand} (${counts[brand] || 0})</button>`
+     ).join('')}`;
+}
+
+function isPersonalDebtor(d) {
+  return /(^|-)personal/i.test(d.debtor_type || '');
+}
+
+function monthRows(d, monthKey) {
+  return (d.month_breakdown || {})[monthKey] || [];
+}
+
+function sumItemCtn(d, monthKey, itemCode) {
+  return monthRows(d, monthKey)
+    .filter(r => (r.item || '') === itemCode)
+    .reduce((sum, r) => sum + (Number(r.ctn) || 0), 0);
+}
+
+function sumBrandCtnAllMonths(d, brand) {
+  const itemKeys = BRAND_ITEMS[brand] || [];
+  return Object.values(d.month_breakdown || {})
+    .flat()
+    .filter(r => itemKeys.includes(r.item || ''))
+    .reduce((sum, r) => sum + (Number(r.ctn) || 0), 0);
+}
+
+function getPrevMonthKey(d, curMth) {
+  return Object.keys(d.month_breakdown || {}).find(m => m !== curMth) || '';
+}
+
+function buildDropSkuOptions(debtors) {
+  const skuSet = new Set();
+  debtors.forEach(d => {
+    Object.values(d.month_breakdown || {}).flat().forEach(r => {
+      if (r.item) skuSet.add(r.item);
+    });
+  });
+  return [...skuSet].sort((a, b) => a.localeCompare(b));
+}
+
+function buildDroppingSkuRows(debtors, selectedSku = 'all') {
+  const curMth = DATA?.current_month || '';
+  const rows = [];
+  debtors.forEach(d => {
+    if (isPersonalDebtor(d)) return;
+    const prevMth = getPrevMonthKey(d, curMth);
+    const itemCodes = selectedSku === 'all'
+      ? ['ALL SKU']
+      : [selectedSku];
+    itemCodes.forEach(itemCode => {
+      const prevCtn = itemCode === 'ALL SKU' ? (d.ctn_prev1 || 0) : sumItemCtn(d, prevMth, itemCode);
+      const curCtn = itemCode === 'ALL SKU' ? (d.ctn_cur || 0) : sumItemCtn(d, curMth, itemCode);
+      if (prevCtn > 0 && curCtn < prevCtn) {
+        rows.push({
+          debtor_code: d.debtor_code,
+          company_name: d.company_name,
+          debtor_type: d.debtor_type,
+          sku: itemCode,
+          prev_ctn: prevCtn,
+          cur_ctn: curCtn,
+          drop_pct: Math.round((prevCtn - curCtn) / prevCtn * 100),
+          stopped: curCtn === 0,
+        });
+      }
+    });
+  });
+  return rows;
+}
+
+function buildNeverBoughtRows(debtors) {
+  const activeDebtors = debtors.filter(d => d.dm_active !== false && !isPersonalDebtor(d));
+  return DROP_BRANDS.reduce((acc, brand) => {
+    acc[brand] = activeDebtors
+      .filter(d => sumBrandCtnAllMonths(d, brand) === 0)
+      .sort((a, b) => (a.company_name || '').localeCompare(b.company_name || ''));
+    return acc;
+  }, {});
+}
+
+function setDropCtnFilter(val, el) {
+  dropCtnFilter = val;
+  document.querySelectorAll('#drop-ctn-filter-row .filter-chip').forEach(c => c.classList.remove('active'));
+  el?.classList.add('active');
+  currentPage = 1;
+  renderDebtors();
+}
+
+function setDropSkuFilter(val, el) {
+  dropSkuFilter = val;
+  document.querySelectorAll('#drop-sku-filter-row .filter-chip').forEach(c => c.classList.remove('active'));
+  el?.classList.add('active');
+  currentPage = 1;
+  renderDebtors();
+}
+
+function setNeverBrandFilter(val, el) {
+  neverBrandFilter = val;
+  document.querySelectorAll('#brand-filter-row .filter-chip').forEach(c => c.classList.remove('active'));
+  el?.classList.add('active');
+  currentPage = 1;
+  renderDebtors();
+}
+
+function renderDropMode(debtors) {
+  const skuOptions = buildDropSkuOptions(debtors);
+  let dropRows = buildDroppingSkuRows(debtors, dropSkuFilter);
+  if (dropCtnFilter === 'stopped') dropRows = dropRows.filter(r => r.stopped);
+  if (dropCtnFilter === 'reduced30') dropRows = dropRows.filter(r => !r.stopped && r.drop_pct >= 30);
+  dropRows.sort((a, b) => b.drop_pct - a.drop_pct);
+  const shownDropRows = dropRows.slice(0, 100);
+
+  const neverRows = buildNeverBoughtRows(debtors);
+  const selectedNeverRows = neverRows[neverBrandFilter] || [];
+  renderBrandFilterRow(debtors);
+
+  document.getElementById('page-info').textContent = `1-${shownDropRows.length} of ${dropRows.length}`;
+  document.getElementById('btn-prev').disabled = true;
+  document.getElementById('btn-next').disabled = true;
+
+  const skuButtons = ['all', ...skuOptions].map(sku => {
+    const label = sku === 'all' ? 'ALL SKU' : sku;
+    return `<button class="filter-chip ${sku === dropSkuFilter ? 'active' : ''}" onclick="setDropSkuFilter('${sku.replace(/'/g,"\\'")}',this)">${label}</button>`;
+  }).join('');
+
+  const dropHtml = shownDropRows.length ? shownDropRows.map(r => `
+    <div class="debtor-card" style="padding:12px 14px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+        <div style="min-width:0;">
+          <div class="debtor-name">${r.company_name || ''}</div>
+          <div class="debtor-meta">${r.debtor_code || ''} · ${r.debtor_type || ''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+          <span class="status-inline" style="background:rgba(77,166,255,.15);color:var(--blue);">${r.sku}</span>
+          <span style="font-family:var(--mono);font-size:11px;color:var(--text);white-space:nowrap;">${r.prev_ctn} → ${r.cur_ctn}</span>
+          <span class="status-inline" style="background:rgba(255,95,95,.15);color:var(--red);">-${r.drop_pct}%</span>
+        </div>
+      </div>
+    </div>`).join('') : `<div class="empty-state">No dropping SKU rows</div>`;
+
+  const neverHtml = selectedNeverRows.length ? selectedNeverRows.map(d => `
+    <div class="debtor-card" style="padding:12px 14px;">
+      <div class="debtor-name">${d.company_name || ''}</div>
+      <div class="debtor-meta">${d.debtor_code || ''} · ${d.debtor_type || ''}</div>
+      ${d.phone ? `<a href="tel:${d.phone}" style="display:inline-block;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--blue);text-decoration:none;">📞 ${d.phone}</a>` : ''}
+    </div>`).join('') : `<div class="empty-state">No never-bought debtors for ${neverBrandFilter}</div>`;
+
+  document.getElementById('debtor-list').innerHTML = `
+    <div style="margin:8px 0 10px;">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;">条数下降:</div>
+      <div id="drop-sku-filter-row" class="filter-row" style="display:flex;overflow-x:auto;gap:8px;white-space:nowrap;padding-bottom:4px;margin-bottom:8px;">${skuButtons}</div>
+      <div id="drop-ctn-filter-row" class="filter-row" style="display:flex;overflow-x:auto;gap:8px;white-space:nowrap;padding-bottom:4px;">
+        <button class="filter-chip ${dropCtnFilter === 'all' ? 'active' : ''}" onclick="setDropCtnFilter('all',this)">ALL</button>
+        <button class="filter-chip ${dropCtnFilter === 'stopped' ? 'active' : ''}" onclick="setDropCtnFilter('stopped',this)">STOPPED BUYING</button>
+        <button class="filter-chip ${dropCtnFilter === 'reduced30' ? 'active' : ''}" onclick="setDropCtnFilter('reduced30',this)">REDUCED ≥30%</button>
+      </div>
+    </div>
+    ${dropHtml}
+    <div style="margin:18px 0 8px;">
+      <div style="font-weight:700;font-size:14px;color:var(--text);">未购买 — 近4个月未购买此品牌</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;">${selectedNeverRows.length} 个客户从未购买 ${neverBrandFilter}</div>
+    </div>
+    ${neverHtml}`;
 }
 
 function renderDebtors() {
@@ -1445,6 +1645,11 @@ function renderDebtors() {
   // Flag count
   const flagCount = getAgentFlagCount(currentAgent);
   document.getElementById('sum-flags').textContent = flagCount;
+
+  if (filters.special === 'drop') {
+    renderDropMode(debtors);
+    return;
+  }
 
   // Filter
   const search = (document.getElementById('debtor-search')?.value || '').toLowerCase();
@@ -1513,7 +1718,7 @@ function renderDebtors() {
   if (filters.brand !== 'all') {
     bannerEl.style.display = 'flex';
     bannerEl.innerHTML = `<span class="brand-banner-text">还未购买 ${filters.brand} — ${filtered.length} 户口</span>
-      <button class="brand-banner-close" onclick="setBrandFilter('all',document.querySelector('#brand-filter-row .filter-chip[data-brand=\\'all\\']'))">×</button>`;
+      <button class="brand-banner-close" onclick="clearBrandFilter()">×</button>`;
   } else if (filters.special === 'newsku') {
     bannerEl.style.display = 'flex';
     bannerEl.style.background = 'rgba(167,139,250,.1)';
