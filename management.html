@@ -2124,16 +2124,36 @@ function renderCampaignsMgmt() {
     const isBday = camp.type === 'birthday_gift' || camp.id === 'birthday_gift_auto';
     const pool   = getCampaignPool(camp);
     const listCodes = new Set(pool.map(d => d.code));
-    // Agent-keyed index of pool entries
-    const poolByAgent = {};
-    pool.forEach(d => {
-      if (!d.agent) return;
-      if (!poolByAgent[d.agent]) poolByAgent[d.agent] = [];
-      poolByAgent[d.agent].push(d);
-    });
-
     // Pull Supabase claims for THIS campaign
     const campClaims = (CAMP_CLAIMS_CACHE || []).filter(r => r.camp_id === camp.id);
+
+    const poolByAgent = {};
+    const poolCodes = new Set(pool.map(d => (d.code || '').toUpperCase()));
+    const poolHasAgent = pool.some(d => d.agent && d.agent.trim() !== '');
+    if (poolHasAgent) {
+      // Future campaigns: agent field present in pool
+      pool.forEach(d => {
+        const ag = (d.agent || '').toUpperCase();
+        if (!ag) return;
+        if (!poolByAgent[ag]) poolByAgent[ag] = [];
+        poolByAgent[ag].push(d);
+      });
+    } else {
+      // Legacy campaigns: no agent field — derive from claims (on-list only)
+      campClaims.forEach(r => {
+        const ag = (r.agent || '').toUpperCase();
+        const code = (r.debtor_code || '').toUpperCase();
+        if (!poolCodes.has(code)) return;
+        if (!poolByAgent[ag]) poolByAgent[ag] = new Set();
+        poolByAgent[ag].add(code);
+      });
+    }
+    // Normalize — ensure all AGENTS have an entry
+    AGENTS.forEach(ag => {
+      const val = poolByAgent[ag];
+      poolByAgent[ag] = val instanceof Set ? [...val] : (val || []);
+    });
+    const isLegacyPool = !poolHasAgent;
 
     // Per-agent rollup
     const perAgent = {};   // agent → { poolCount, delivered, onListDelivered, offListDelivered, excluded, offListCodes:[] }
@@ -2181,12 +2201,12 @@ function renderCampaignsMgmt() {
       if (isBday) {
         a.effPool = Math.max(0, a.poolCount - a.excluded);
         // For birthday: don't expand pool with off-list. Off-list birthday is a data concern.
-        a.pct = a.effPool > 0 ? Math.round(a.onListDelivered / a.effPool * 100) : 0;
+        a.pct = a.effPool > 0 ? Math.min(100, Math.round(a.onListDelivered / a.effPool * 100)) : 0;
         a.yet = Math.max(0, a.effPool - a.onListDelivered);
       } else {
         // Option 4: pool expands by off-list deliveries
         a.effPool = Math.max(0, a.poolCount + a.offListDelivered - a.excluded);
-        a.pct = a.effPool > 0 ? Math.round(a.delivered / a.effPool * 100) : 0;
+        a.pct = a.effPool > 0 ? Math.min(100, Math.round(a.delivered / a.effPool * 100)) : 0;
         a.yet = Math.max(0, a.effPool - a.delivered);
       }
     });
@@ -2204,13 +2224,13 @@ function renderCampaignsMgmt() {
       effPool   = Math.max(0, totalPoolCount - totalExcluded);
       delivered = totalOnList;  // birthday counts on-list only
       totalYet  = Math.max(0, effPool - delivered);
-      pct       = effPool > 0 ? Math.round(delivered / effPool * 100) : 0;
+      pct       = effPool > 0 ? Math.min(100, Math.round(delivered / effPool * 100)) : 0;
     } else {
       // Option 4: pool auto-expands
       effPool   = Math.max(0, totalPoolCount + totalOffList - totalExcluded);
       delivered = totalOnList + totalOffList;
       totalYet  = Math.max(0, effPool - delivered);
-      pct       = effPool > 0 ? Math.round(delivered / effPool * 100) : 0;
+      pct       = effPool > 0 ? Math.min(100, Math.round(delivered / effPool * 100)) : 0;
     }
 
     return {
