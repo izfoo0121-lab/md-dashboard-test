@@ -902,7 +902,7 @@ const SupabaseKpiSync = (() => {
       const rows = await r.json();
       const byAgent = {};
       rows.forEach(r => {
-        const a = r.agent;
+        const a = (r.agent || '').toUpperCase();
         if (!byAgent[a]) byAgent[a] = { verified: 0, excluded: 0 };
         if (r.status === 'excluded') byAgent[a].excluded++;
         else if (['claimed','delivered','verified'].includes(r.status)) byAgent[a].verified++;
@@ -2150,7 +2150,7 @@ function renderCampaignsMgmt() {
 
     // First pass — walk through claims, bucket by agent + on/off list
     campClaims.forEach(r => {
-      const ag = r.agent || '';
+      const ag = (r.agent || '').toUpperCase();
       if (!perAgent[ag]) return;  // unknown agent, skip
       const code = (r.debtor_code || '').toUpperCase();
       const status = r.status;
