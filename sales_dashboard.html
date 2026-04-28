@@ -1242,7 +1242,7 @@ function renderGlobalSearch(query) {
       ${results.length} result${results.length!==1?'s':''} across all agents
     </div>
     ${results.slice(0, 50).map(d => {
-      const stMap = { active:'已激活', need_reactivation:'待激活', pending:'Pending' };
+      const stMap = { active:'已激活', need_reactivation:'待激活', pending:'当月未开单' };
       const stCls = { active:'status-active', need_reactivation:'status-reactiv', pending:'status-pending' };
       const stTxt = stMap[d.status] || d.status || '';
       const phone = (d.phone||'').replace(/\s/g,'');
@@ -1711,7 +1711,7 @@ function setNonVipType(type, el) {
 function renderDebtorCard(d, runNo) {
     // Status label — Chinese
     const stCls = d.status==='active' ? 'si-active' : d.status==='pending' ? 'si-pending' : 'si-reactiv';
-    const stTxt = d.status==='active' ? '已激活' : d.status==='pending' ? '❌ Pending' : '待激活';
+    const stTxt = d.status==='active' ? '已激活' : d.status==='pending' ? '当月未开单' : '待激活';
 
     // Badges
     // Campaign badges — show category-specific promo if available
