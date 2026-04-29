@@ -2253,13 +2253,15 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                     "source": source, "excluded": False,
                 }
 
-            elif key in ("new_accounts", "vip_count", "event"):
+            elif key in ("new_accounts", "vip_count", "event", "campaign_1"):
                 # Admin-entered actual via Supabase kpi_manual table.
                 # Dashboard overrides `actual` from Supabase at render time.
                 # Target still uses auto_targets (snapshot-based) for new_accounts/vip_count,
                 # or per-agent kpi_targets for event.
                 if key == "event":
                     target = tgt("event", 16)
+                elif key == "campaign_1":
+                    target = 100  # entered as percentage 0-100
                 else:
                     target = auto_targets.get(key, 1)
                 items_out[key] = {
@@ -2289,7 +2291,6 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                 }
 
             elif key in ("alt_channel_contact", "alt_channel_deliver",
-                         "campaign_1",
                          "d_key_accuracy","d_account_accuracy","d_outstanding","d_followup",
                          "e_punctuality","e_warehouse","e_efficiency","e_check_car","e_check_stock"):
                 # Direct score entry — actual entered as score out of max
@@ -2726,6 +2727,62 @@ def main():
             "inherited_from":     ag_cfg.get("inherits_from", None),
             "inherit_from_month": ag_cfg.get("inherit_from_month", None),
         }
+
+    # ── Supabase KPI manual scores fetch (from kpi_manual table) ────
+    try:
+        import requests as _req
+        _SB_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co'
+        _SB_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw'
+        _resp = _req.get(
+            f"{_SB_URL}/rest/v1/kpi_manual",
+            params={"select": "*", "month": f"eq.{cur_month}"},
+            headers={"apikey": _SB_KEY, "Authorization": f"Bearer {_SB_KEY}"},
+            timeout=10
+        )
+        if _resp.ok:
+            # Build lookup: agent -> {new_accounts: N, vip_count: N, ...}
+            _sb_kpi = {}
+            for r in _resp.json():
+                _ag = (r.get('agent') or '').upper()
+                if _ag:
+                    _sb_kpi[_ag] = {
+                        'new_accounts': r.get('new_accounts', 0) or 0,
+                        'vip_count':    r.get('vip_count', 0) or 0,
+                        'event':        r.get('event_count', 0) or 0,
+                        'campaign_1':   r.get('campaign_pct', 0) or 0,
+                    }
+            _applied = 0
+            for _agent, _adata in output.get('agents', {}).items():
+                _items = _adata.get('kpi', {}).get('items', {})
+                _scores = _sb_kpi.get(_agent, {})
+                if not _scores:
+                    continue
+                for _key, _item in _items.items():
+                    if not _item.get('needs_supabase_fetch'):
+                        continue
+                    if _key in _scores:
+                        _item['actual'] = _scores[_key]
+                        _tgt = _item.get('target') or 1
+                        _max = _item.get('max_score') or 0
+                        _item['score'] = round(min(_item['actual'] / _tgt, 1) * _max, 2)
+                        _item['pct'] = round((_item['actual'] / _tgt) * 100) if _tgt else 0
+                # Recompute KPI totals for this agent
+                _kpi = _adata.get('kpi', {})
+                _all_items = _kpi.get('items', {})
+                if _all_items:
+                    _kpi['grand_total'] = round(sum(i.get('score', 0) for i in _all_items.values()), 2)
+                    _kpi['total_abc'] = round(sum(i.get('score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C')), 2)
+                    _max_total = sum(i.get('max_score', 0) for i in _all_items.values())
+                    _max_abc = sum(i.get('max_score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C'))
+                    _kpi['grand_pct'] = round(_kpi['grand_total'] / _max_total * 100, 1) if _max_total else 0
+                    _kpi['total_pct'] = round(_kpi['total_abc'] / _max_abc * 100, 1) if _max_abc else 0
+                _applied += 1
+            log(f"   [Supabase KPI] Applied manual scores for {_applied} agents")
+        else:
+            log(f"   [Supabase KPI] Fetch failed: {_resp.status_code}")
+    except Exception as _e:
+        log(f"   [Supabase KPI] Skipped: {_e}")
+    # ────────────────────────────────────────────────────────────────
 
     # ── Write JSON ──────────────────────────────────────────────────
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
