@@ -2530,6 +2530,40 @@ def calc_working_days(targets=None, cur_month=None):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def calc_agent_activity_daily(df, agents, cur_month):
+    """Daily Canggih CTN + transaction count by agent for Activity Map."""
+    if df is None or not cur_month:
+        return {}
+    try:
+        parts = cur_month.split()
+        month_idx = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].index(parts[0]) + 1
+        year = 2000 + int(parts[1])
+    except Exception:
+        return {}
+
+    rows = df[
+        (df["item_group"] != EIGHTCOM_GROUP) &
+        (df["date_parsed"].notna()) &
+        (df["date_parsed"].dt.month == month_idx) &
+        (df["date_parsed"].dt.year == year)
+    ].copy()
+    if rows.empty:
+        return {agent: {} for agent in agents}
+
+    rows["activity_date"] = rows["date_parsed"].dt.strftime("%Y-%m-%d")
+    out = {agent: {} for agent in agents}
+    grouped = rows.groupby(["agent", "activity_date"])
+    for (agent, day), g in grouped:
+        if agent not in out:
+            out[agent] = {}
+        txn_count = g["doc_no"].nunique() if "doc_no" in g.columns else len(g)
+        out[agent][day] = {
+            "ctn": round(float(g["qty_ctn"].sum()), 2),
+            "txn": int(txn_count),
+        }
+    return out
+
+
 def main():
     log("=" * 60)
     log("MD Sales Dashboard — process_data.py (Phase 2)")
@@ -2756,6 +2790,7 @@ def main():
     team         = calc_team_summary(sales_prog, brand_comm, all_agents, targets, cur_month, df_raw, prev_months)
     working_days = calc_working_days(targets, cur_month)
     brand_camps  = calc_brand_campaigns(df, targets, agents, cur_month, prev_months, brand_config)
+    agent_activity_daily = calc_agent_activity_daily(df, all_agents, cur_month)
 
     # ── Enrich debtor cards with brand campaign tiers ──
     # Personal debtors skipped (business rule, same as other campaigns)
@@ -2787,6 +2822,7 @@ def main():
         "group_brand_targets": group_brands,
         "birthday_campaign":   birthday_camp,
         "brand_campaigns":     brand_camps,
+        "agent_activity_daily": agent_activity_daily,
         "agents":         {},
         "team":           team,
         "config": {
