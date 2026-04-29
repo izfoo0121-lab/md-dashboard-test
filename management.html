@@ -884,7 +884,8 @@ async function _activitySupabase(path) {
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
   });
   if (!r.ok) throw new Error(await r.text());
-  return await r.json();
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
 }
 
 async function _loadActivityCalendarMeta(startKey, endKey) {
@@ -2735,6 +2736,9 @@ function renderBrandSkuStatus() {
     </thead>
     <tbody>`;
 
+  const totals = {};
+  BRANDS.forEach(brand => { totals[brand] = { nonBuyers:0, target:0, actual:0 }; });
+
   agents.forEach((agent, ri) => {
     const bc  = D.agents[agent]?.brand_commission || {};
     const bg  = ri % 2 === 0 ? 'transparent' : 'rgba(255,255,255,.02)';
@@ -2749,6 +2753,9 @@ function renderBrandSkuStatus() {
         const pctVal     = target !== '—' && target > 0 ? Math.min(actual/target*100,100) : 0;
         const col        = hit ? '#2a7a4b' : pctVal >= 60 ? '#c8860a' : '#c8381a';
         const isAuto     = AUTO_B.has(brand);
+        totals[brand].nonBuyers += Number(nonBuyers) || 0;
+        totals[brand].target    += Number(target) || 0;
+        totals[brand].actual    += Number(actual) || 0;
 
         return `<td style="padding:6px 8px;text-align:center;border-left:1px solid rgba(255,255,255,.06);color:#c8381a;">${nonBuyers}</td>
           <td style="padding:6px 8px;text-align:center;${isAuto?'color:var(--blue)':'color:var(--ink3);'};">${target}</td>
@@ -2758,6 +2765,18 @@ function renderBrandSkuStatus() {
       }).join('')}
     </tr>`;
   });
+
+  html += `<tr style="background:var(--color-background-secondary,var(--bg));border-top:2px solid var(--color-border-secondary,var(--border));font-weight:500;">
+    <td style="padding:8px 12px;font-weight:700;white-space:nowrap;">合计</td>
+    ${BRANDS.map(brand => {
+      const t = totals[brand];
+      const hit = t.target > 0 && t.actual >= t.target;
+      const isAuto = AUTO_B.has(brand);
+      return `<td style="padding:6px 8px;text-align:center;border-left:1px solid rgba(255,255,255,.06);color:#c8381a;">${t.nonBuyers}</td>
+        <td style="padding:6px 8px;text-align:center;${isAuto?'color:var(--blue)':'color:var(--ink3);'};">${t.target}</td>
+        <td style="padding:6px 8px;text-align:center;font-weight:500;color:${hit ? '#2a7a4b' : 'var(--ink)'};">${t.actual}${hit?'✓':''}</td>`;
+    }).join('')}
+  </tr>`;
 
   html += `</tbody></table>`;
   el.innerHTML = html;
