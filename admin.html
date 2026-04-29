@@ -173,6 +173,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
     <button class="tab-btn" onclick="switchTab('sku',this)">SKU Config</button>
     <button class="tab-btn" onclick="switchTab('brand_sku',this)">🏷️ Brand SKU Status</button>
     <button class="tab-btn" onclick="switchTab('holidays',this)">📅 Holidays</button>
+    <button class="tab-btn" onclick="switchTab('leave_records',this)">请假记录 Leave Records</button>
     <button class="tab-btn" onclick="switchTab('brand_camps',this)">🔥 Brand Promo</button>
     <button class="tab-btn" onclick="switchTab('campaigns',this)">📢 Campaigns</button>
     <button class="tab-btn" onclick="switchTab('kpi_weights',this)">⚖️ KPI Weights</button>
@@ -488,6 +489,55 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
       </div>
 
       <div class="save-toast" id="save-toast-ph">✓ Holiday added</div>
+    </div>
+  </div>
+
+  <!-- ── Tab: Leave Records ── -->
+  <div id="tab-leave_records" class="tab-content">
+    <div class="page-body">
+      <div class="sec-header">请假记录 / Leave Records</div>
+      <div class="sec-sub">Manual leave entry for Activity Map overlays. Types: AL, MC, RL, OFF.</div>
+
+      <div class="admin-card" style="margin-bottom:10px;">
+        <div class="sec-divider" style="margin-top:0;">Add Leave</div>
+        <div class="input-row">
+          <div class="field-wrap">
+            <div class="field-lbl">Agent</div>
+            <select id="leave-agent"></select>
+          </div>
+          <div class="field-wrap">
+            <div class="field-lbl">Date</div>
+            <input type="date" id="leave-date">
+          </div>
+          <div class="field-wrap">
+            <div class="field-lbl">Leave Type</div>
+            <select id="leave-type">
+              <option value="AL">AL</option>
+              <option value="MC">MC</option>
+              <option value="RL">RL</option>
+              <option value="OFF">OFF</option>
+            </select>
+          </div>
+        </div>
+        <div class="input-group">
+          <div class="input-label">Note (optional)</div>
+          <input type="text" id="leave-note" placeholder="Short note">
+        </div>
+        <button class="save-btn" onclick="saveLeaveRecord()" style="margin-top:8px;">Save Leave</button>
+      </div>
+
+      <div class="sec-divider">Existing Records</div>
+      <div class="admin-card" style="margin-bottom:10px;">
+        <div class="input-row" style="align-items:flex-end;">
+          <div class="field-wrap">
+            <div class="field-lbl">Month</div>
+            <input type="month" id="leave-month" onchange="loadLeaveRecords()">
+          </div>
+        </div>
+      </div>
+      <div class="admin-card" style="overflow-x:auto;">
+        <div id="leave-records-table"></div>
+      </div>
     </div>
   </div>
 
@@ -1402,6 +1452,7 @@ function switchTab(tab, el) {
   el.classList.add('active');
   if (tab === 'pins') renderPinForm();
   if (tab === 'kpi_manual') loadKpiManual();
+  if (tab === 'leave_records') initLeaveRecordsTab();
   if (tab === 'archive') refreshArchiveList();
   if (tab === 'sync') {
     const cfg = typeof GistSync !== 'undefined' ? GistSync.getConfig() : {};
@@ -3420,9 +3471,15 @@ async function saveAgentWorkday(agent) {
 
 async function loadAgentOffdays() {
   try {
-    const rows = await _adminSupabaseFetch('agent_offdays?select=agent_name,off_days');
+    const rows = await _adminSupabaseFetch('agent_offdays?select=agent_name,off_days,default_day,exceptions');
     AGENT_OFFDAYS_CACHE = {};
-    (rows || []).forEach(r => { AGENT_OFFDAYS_CACHE[r.agent_name] = r.off_days || []; });
+    (rows || []).forEach(r => {
+      AGENT_OFFDAYS_CACHE[r.agent_name] = {
+        default_day: r.default_day || (r.off_days || [])[0] || 'Sunday',
+        exceptions: r.exceptions || [],
+        off_days: r.off_days || [],
+      };
+    });
   } catch (e) {
     console.warn('[agent_offdays] load failed:', e.message);
     AGENT_OFFDAYS_CACHE = {};
@@ -3430,39 +3487,221 @@ async function loadAgentOffdays() {
   renderAgentOffdaysTable();
 }
 
+function _adminMonthDatesForDefault(defaultDay) {
+  if (!defaultDay || defaultDay === 'None') return [];
+  const start = new Date(_adminCurrentMonthDate() + 'T00:00:00');
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  const out = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const weekday = d.toLocaleDateString('en-US', {weekday:'long'});
+    const match = defaultDay === weekday ||
+      (defaultDay === 'Sunday + Monday' && (weekday === 'Sunday' || weekday === 'Monday'));
+    if (match) {
+      out.push({
+        key: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`,
+        label: `${d.getDate()} ${d.toLocaleDateString('en-US', {weekday:'short'})}`,
+      });
+    }
+  }
+  return out;
+}
+
+function setAgentDefaultOffday(agent, value) {
+  const cur = AGENT_OFFDAYS_CACHE[agent] || {};
+  AGENT_OFFDAYS_CACHE[agent] = { ...cur, default_day: value, exceptions: [] };
+  renderAgentOffdaysTable();
+}
+
+function toggleAgentOffdayException(agent, dateKey) {
+  const cur = AGENT_OFFDAYS_CACHE[agent] || { default_day:'Sunday', exceptions:[] };
+  const set = new Set(cur.exceptions || []);
+  if (set.has(dateKey)) set.delete(dateKey);
+  else set.add(dateKey);
+  AGENT_OFFDAYS_CACHE[agent] = { ...cur, exceptions: [...set].sort() };
+  const el = document.getElementById(`exc-${agent}-${dateKey}`);
+  if (el) {
+    const isOn = set.has(dateKey);
+    el.style.background = isOn ? '#FCEBEB' : 'var(--bg)';
+    el.style.color = isOn ? '#A32D2D' : 'var(--ink3)';
+    el.style.borderColor = isOn ? '#F7C1C1' : 'var(--border)';
+  }
+}
+
 function renderAgentOffdaysTable() {
   const el = document.getElementById('agent-offdays-table');
   if (!el) return;
-  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px;min-width:720px;">
+  const options = ['Sunday','Monday','Saturday','Sunday + Monday','None'];
+  const month = _adminCurrentMonthDate().slice(0, 7);
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px;min-width:820px;">
     <thead><tr>
       <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">Agent</th>
-      <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">休息日</th>
+      <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">Default 休息日</th>
+      <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">${month} exceptions</th>
       <th style="padding:7px;border-bottom:1px solid var(--border);"></th>
     </tr></thead>
     <tbody>${AGENTS.map(agent => {
-      const selected = new Set(AGENT_OFFDAYS_CACHE[agent] || []);
-      const boxes = days.map(day => `<label style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;white-space:nowrap;">
-        <input type="checkbox" class="offday-${agent}" value="${day}" ${selected.has(day)?'checked':''}> ${day}
-      </label>`).join('');
+      const cfg = AGENT_OFFDAYS_CACHE[agent] || { default_day:'Sunday', exceptions:[] };
+      const defaultDay = cfg.default_day || 'Sunday';
+      const exceptions = new Set(cfg.exceptions || []);
+      const select = `<select id="offday-default-${agent}" onchange="setAgentDefaultOffday('${agent}',this.value)" style="font-family:var(--mono);font-size:10px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);">
+        ${options.map(o => `<option value="${o}" ${o===defaultDay?'selected':''}>${o}</option>`).join('')}
+      </select>`;
+      const tags = _adminMonthDatesForDefault(defaultDay).map(d => {
+        const on = exceptions.has(d.key);
+        return `<span id="exc-${agent}-${d.key}" onclick="toggleAgentOffdayException('${agent}','${d.key}')"
+          title="Click to mark this default rest date as exception"
+          style="display:inline-flex;margin:2px 4px 2px 0;padding:3px 7px;border-radius:7px;cursor:pointer;font-size:9px;border:0.5px solid ${on?'#F7C1C1':'var(--border)'};background:${on?'#FCEBEB':'var(--bg)'};color:${on?'#A32D2D':'var(--ink3)'};white-space:nowrap;">${d.label}</span>`;
+      }).join('') || `<span style="color:var(--ink3);">No default off-day dates</span>`;
       return `<tr>
         <td style="padding:7px;border-bottom:1px solid var(--border);font-weight:700;">${agent}</td>
-        <td style="padding:7px;border-bottom:1px solid var(--border);">${boxes}</td>
+        <td style="padding:7px;border-bottom:1px solid var(--border);">${select}</td>
+        <td style="padding:7px;border-bottom:1px solid var(--border);">${tags}</td>
         <td style="padding:7px;border-bottom:1px solid var(--border);text-align:right;"><button onclick="saveAgentOffdays('${agent}')" style="font-family:var(--mono);font-size:9px;padding:5px 9px;border-radius:6px;border:1px solid var(--border);background:var(--ink);color:#fff;cursor:pointer;">Save</button></td>
       </tr>`;
     }).join('')}</tbody></table>`;
 }
 
 async function saveAgentOffdays(agent) {
-  const vals = [...document.querySelectorAll(`.offday-${CSS.escape(agent)}:checked`)].map(x => x.value);
-  if (vals.length < 1 || vals.length > 2) { alert('Select 1 or 2 rest days'); return; }
+  const cfg = AGENT_OFFDAYS_CACHE[agent] || {};
+  const defaultDay = document.getElementById(`offday-default-${agent}`)?.value || cfg.default_day || 'Sunday';
+  const exceptions = cfg.exceptions || [];
+  const offDays = defaultDay === 'None'
+    ? []
+    : defaultDay === 'Sunday + Monday' ? ['Sunday','Monday'] : [defaultDay];
   await _adminSupabaseFetch('agent_offdays?on_conflict=agent_name', {
     method: 'POST',
     headers: {'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
-    body: JSON.stringify([{agent_name: agent, off_days: vals, updated_at: new Date().toISOString()}])
+    body: JSON.stringify([{
+      agent_name: agent,
+      off_days: offDays,
+      default_day: defaultDay,
+      exceptions,
+      updated_at: new Date().toISOString()
+    }])
   });
-  AGENT_OFFDAYS_CACHE[agent] = vals;
+  AGENT_OFFDAYS_CACHE[agent] = { default_day: defaultDay, exceptions, off_days: offDays };
   alert(`Saved ${agent} 休息日`);
+}
+
+let LEAVE_SCHEMA = null;
+let LEAVE_TAB_READY = false;
+
+function _adminMonthStartEnd(monthValue) {
+  const [year, month] = monthValue.split('-').map(Number);
+  const start = `${year}-${String(month).padStart(2,'0')}-01`;
+  const endDate = new Date(year, month, 0);
+  const end = `${year}-${String(month).padStart(2,'0')}-${String(endDate.getDate()).padStart(2,'0')}`;
+  return { start, end };
+}
+
+function _leaveTypePill(type) {
+  const colors = {
+    AL:  ['#E6F1FB', '#185FA5'],
+    MC:  ['#FAEEDA', '#854F0B'],
+    RL:  ['#EEEDFE', '#534AB7'],
+    OFF: ['#F1EFE8', '#5F5E5A'],
+  };
+  const [bg, fg] = colors[type] || colors.OFF;
+  return `<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:${bg};color:${fg};font-family:var(--mono);font-size:10px;font-weight:700;">${type || '?'}</span>`;
+}
+
+async function detectLeaveSchema() {
+  if (LEAVE_SCHEMA) return LEAVE_SCHEMA;
+  try {
+    await _adminSupabaseFetch('agent_leave?select=id,agent_name,leave_date,leave_type,notes,recorded_at&limit=1');
+    LEAVE_SCHEMA = { agent:'agent_name', date:'leave_date', note:'notes', recorded:'recorded_at' };
+  } catch (e) {
+    try {
+      await _adminSupabaseFetch('agent_leave?select=id,agent,date,leave_type,reason,logged_at&limit=1');
+      LEAVE_SCHEMA = { agent:'agent', date:'date', note:'reason', recorded:'logged_at' };
+    } catch (_) {
+      LEAVE_SCHEMA = { agent:'agent_name', date:'leave_date', note:null, recorded:null };
+    }
+  }
+  return LEAVE_SCHEMA;
+}
+
+async function initLeaveRecordsTab() {
+  if (!LEAVE_TAB_READY) {
+    const agentEl = document.getElementById('leave-agent');
+    if (agentEl) agentEl.innerHTML = AGENTS.map(a => `<option value="${a}">${a}</option>`).join('');
+    const today = new Date();
+    const monthEl = document.getElementById('leave-month');
+    const dateEl = document.getElementById('leave-date');
+    const monthValue = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
+    if (monthEl && !monthEl.value) monthEl.value = monthValue;
+    if (dateEl && !dateEl.value) dateEl.value = `${monthValue}-${String(today.getDate()).padStart(2,'0')}`;
+    await detectLeaveSchema();
+    LEAVE_TAB_READY = true;
+  }
+  await loadLeaveRecords();
+}
+
+async function loadLeaveRecords() {
+  const el = document.getElementById('leave-records-table');
+  const monthEl = document.getElementById('leave-month');
+  if (!el || !monthEl?.value) return;
+  const schema = await detectLeaveSchema();
+  const { start, end } = _adminMonthStartEnd(monthEl.value);
+  el.innerHTML = '<div style="padding:10px;font-family:var(--mono);font-size:10px;color:var(--ink3);">Loading leave records...</div>';
+  try {
+    const rows = await _adminSupabaseFetch(`agent_leave?select=*&${schema.date}=gte.${start}&${schema.date}=lte.${end}&order=${schema.date}.asc`);
+    if (!rows.length) {
+      el.innerHTML = '<div style="padding:10px;font-family:var(--mono);font-size:10px;color:var(--ink3);">No leave records for this month.</div>';
+      return;
+    }
+    el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px;min-width:640px;">
+      <thead><tr>
+        <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">Agent</th>
+        <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">Date</th>
+        <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">Type</th>
+        <th style="text-align:left;padding:7px;border-bottom:1px solid var(--border);">Note</th>
+        <th style="padding:7px;border-bottom:1px solid var(--border);"></th>
+      </tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td style="padding:7px;border-bottom:1px solid var(--border);font-weight:700;">${r.agent_name || r.agent || ''}</td>
+          <td style="padding:7px;border-bottom:1px solid var(--border);">${r.leave_date || r.date || ''}</td>
+          <td style="padding:7px;border-bottom:1px solid var(--border);">${_leaveTypePill(r.leave_type)}</td>
+          <td style="padding:7px;border-bottom:1px solid var(--border);color:var(--ink3);">${r.notes || r.reason || ''}</td>
+          <td style="padding:7px;border-bottom:1px solid var(--border);text-align:right;"><button onclick="deleteLeaveRecord(${r.id})" style="font-family:var(--mono);font-size:9px;padding:5px 9px;border-radius:6px;border:1px solid rgba(200,56,26,.3);background:var(--red-bg);color:var(--accent);cursor:pointer;">Delete</button></td>
+        </tr>`).join('')}</tbody></table>`;
+  } catch (e) {
+    el.innerHTML = `<div style="padding:10px;font-family:var(--mono);font-size:10px;color:var(--accent);">Failed to load: ${e.message}</div>`;
+  }
+}
+
+async function saveLeaveRecord() {
+  const schema = await detectLeaveSchema();
+  const agent = document.getElementById('leave-agent')?.value;
+  const date = document.getElementById('leave-date')?.value;
+  const type = document.getElementById('leave-type')?.value;
+  const note = (document.getElementById('leave-note')?.value || '').trim();
+  if (!agent || !date || !type) { alert('Please choose agent, date, and leave type.'); return; }
+  const row = { leave_type: type };
+  row[schema.agent] = agent;
+  row[schema.date] = date;
+  if (schema.note && note) row[schema.note] = note;
+  if (schema.recorded) row[schema.recorded] = new Date().toISOString();
+  await _adminSupabaseFetch('agent_leave', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','Prefer':'return=minimal'},
+    body: JSON.stringify([row])
+  });
+  document.getElementById('leave-note').value = '';
+  const monthEl = document.getElementById('leave-month');
+  if (monthEl) monthEl.value = date.slice(0, 7);
+  await loadLeaveRecords();
+  alert('Leave saved');
+}
+
+async function deleteLeaveRecord(id) {
+  if (!confirm('Delete this leave record?')) return;
+  await _adminSupabaseFetch(`agent_leave?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: {'Prefer':'return=minimal'}
+  });
+  await loadLeaveRecords();
 }
 
 function downloadSampleDebtorList() {

@@ -892,7 +892,7 @@ async function _loadActivityCalendarMeta(startKey, endKey) {
   try {
     const [leaveRows, offRows, workRows] = await Promise.all([
       _activitySupabase('agent_leave?select=*'),
-      _activitySupabase('agent_offdays?select=agent_name,off_days'),
+      _activitySupabase('agent_offdays?select=agent_name,off_days,default_day,exceptions'),
       _activitySupabase(`agent_workdays?select=agent_name,month,working_days&month=eq.${startKey}`)
     ]);
     const leaveByAgentDate = {};
@@ -904,7 +904,13 @@ async function _loadActivityCalendarMeta(startKey, endKey) {
       leaveByAgentDate[`${agent}|${day}`] = (r.leave_type || 'OFF').toUpperCase();
     });
     const offByAgent = {};
-    (offRows || []).forEach(r => { offByAgent[(r.agent_name || '').toUpperCase()] = r.off_days || []; });
+    (offRows || []).forEach(r => {
+      offByAgent[(r.agent_name || '').toUpperCase()] = {
+        default_day: r.default_day || (r.off_days || [])[0] || '',
+        off_days: r.off_days || [],
+        exceptions: r.exceptions || [],
+      };
+    });
     const workdaysByAgent = {};
     (workRows || []).forEach(r => { workdaysByAgent[(r.agent_name || '').toUpperCase()] = r.working_days; });
     return { leaveByAgentDate, offByAgent, workdaysByAgent };
@@ -944,12 +950,20 @@ async function renderActivityMap() {
       const row = days.map(d => {
         const key = _dateKey(d);
         const dow = d.toLocaleDateString('en-US', {weekday:'short'});
+        const dowLong = d.toLocaleDateString('en-US', {weekday:'long'});
         const sales = activity[agent]?.[key] || {ctn:0, txn:0};
         const ctn = Math.round(Number(sales.ctn || 0));
         const txn = Number(sales.txn || 0);
         const leave = leaveByAgentDate[`${agent}|${key}`];
         const weekend = d.getDay() === 0 || d.getDay() === 6;
-        const offDay = (offByAgent[agent] || []).includes(dow);
+        const offCfg = offByAgent[agent] || {};
+        const exceptions = offCfg.exceptions || [];
+        const defaultDay = offCfg.default_day || '';
+        const legacyDays = offCfg.off_days || [];
+        const defaultOff = defaultDay === dowLong ||
+          (defaultDay === 'Sunday + Monday' && (dowLong === 'Sunday' || dowLong === 'Monday')) ||
+          legacyDays.includes(dowLong) || legacyDays.includes(dow);
+        const offDay = defaultOff && !exceptions.includes(key);
         if (!leave && (weekend || offDay)) {
           return `<div class="activity-cell ${weekend ? 'weekend' : 'off'}">—</div>`;
         }
