@@ -73,7 +73,26 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
 .h-hdr{font-family:var(--mono);font-size:8px;color:var(--ink3);text-align:center;padding:5px 2px;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.05em;}
 .h-agent{font-weight:600;font-size:11px;padding:7px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;cursor:pointer;color:var(--blue);}
 .h-cell{border-bottom:1px solid var(--border);border-left:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;font-weight:500;padding:6px 2px;}
-.hc-g{background:#d4ede1;color:#1a5c38;}.hc-o{background:#fde8d8;color:#7a3500;}.hc-r{background:#fde8e4;color:#8f1a0a;}
+.hc-g{background:#d4ede1;color:#1a5c38;}.hc-o{background:#fef9c3;color:#854d0e;}.hc-r{background:#fde8e4;color:#8f1a0a;}
+/* Activity Map */
+.activity-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;}
+.activity-nav{display:flex;align-items:center;gap:8px;}
+.activity-btn{border:1px solid var(--border);background:var(--surface);color:var(--ink);border-radius:8px;padding:4px 9px;font-family:var(--mono);font-size:10px;cursor:pointer;}
+.activity-month{font-family:var(--display);font-size:18px;letter-spacing:.05em;min-width:82px;text-align:center;}
+.activity-table{border-collapse:separate;border-spacing:0;min-width:max-content;border-top:1px solid var(--border);border-left:1px solid var(--border);}
+.activity-agent,.activity-date,.activity-cell{border-right:1px solid var(--border);border-bottom:1px solid var(--border);}
+.activity-agent{position:sticky;left:0;z-index:3;background:var(--surface);font-weight:700;font-size:11px;padding:9px 10px;color:var(--blue);min-width:70px;width:70px;text-align:left;}
+.activity-date{background:var(--bg);font-family:var(--mono);font-size:8px;text-align:center;padding:6px 4px;color:var(--ink3);min-width:52px;width:52px;position:sticky;top:0;z-index:2;}
+.activity-date.activity-corner{left:0;z-index:4;background:var(--surface);}
+.activity-cell{min-width:52px;width:52px;height:48px;padding:5px 4px;background:#fff;font-family:var(--mono);font-size:9px;line-height:1.25;text-align:center;vertical-align:middle;color:var(--ink);}
+.activity-cell.zero{background:#fff;color:var(--ink3);}
+.activity-cell.off,.activity-cell.weekend{background:#f0eee9;color:var(--ink3);font-size:14px;}
+.activity-txn{font-size:8px;color:var(--ink3);margin-top:2px;}
+.activity-pill{font-family:var(--mono);font-size:7px;border-radius:8px;padding:1px 5px;font-weight:700;line-height:1;}
+.activity-pill.al{background:var(--green-bg);color:var(--green);}
+.activity-pill.mc{background:var(--gold-bg);color:var(--gold);}
+.activity-pill.off{background:var(--blue-bg);color:var(--blue);}
+.activity-legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-family:var(--mono);font-size:9px;color:var(--ink3);}
 /* Debtor summary table */
 .dt-wrap{min-width:340px;}
 .dt-hdr{display:grid;gap:0;border-bottom:2px solid var(--border);}
@@ -199,8 +218,8 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
   <!-- Cross-page nav -->
   <div style="background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.08);padding:6px 16px;display:flex;gap:10px;align-items:center;overflow-x:auto;">
     <span style="font-family:var(--mono);font-size:8px;color:rgba(255,255,255,.3);text-transform:uppercase;letter-spacing:.1em;white-space:nowrap;">Go to:</span>
-    <a href="https://izfoo0121-lab.github.io/md-dashboard/sales_dashboard.html" style="font-family:var(--mono);font-size:9px;color:#4da6ff;text-decoration:none;padding:3px 8px;border:1px solid rgba(77,166,255,.3);border-radius:6px;white-space:nowrap;">👥 Agent</a>
-    <a href="https://izfoo0121-lab.github.io/md-dashboard/admin.html" style="font-family:var(--mono);font-size:9px;color:#f0c040;text-decoration:none;padding:3px 8px;border:1px solid rgba(240,192,64,.3);border-radius:6px;white-space:nowrap;">⚙ Admin</a>
+    <a href="sales_dashboard.html" style="font-family:var(--mono);font-size:9px;color:#4da6ff;text-decoration:none;padding:3px 8px;border:1px solid rgba(77,166,255,.3);border-radius:6px;white-space:nowrap;">👥 Agent</a>
+    <a href="admin.html" style="font-family:var(--mono);font-size:9px;color:#f0c040;text-decoration:none;padding:3px 8px;border:1px solid rgba(240,192,64,.3);border-radius:6px;white-space:nowrap;">⚙ Admin</a>
   </div>
   <div class="mgmt-header">
     <div class="header-row">
@@ -240,23 +259,9 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
       <div id="pending-actions-list"></div>
     </div>
 
-    <!-- 0b. Birthday Gift Audit -->
-    <div id="bday-audit-section" style="display:none;">
-      <div class="sec-lbl no-border" style="color:var(--purple);display:flex;justify-content:space-between;align-items:center;">
-        <span>🎂 Birthday Gift — Audit Required</span>
-        <button onclick="refreshBdayAudit()" id="bday-refresh-btn"
-          style="font-family:var(--mono);font-size:9px;background:rgba(107,63,160,.15);border:1px solid rgba(107,63,160,.3);color:var(--purple);padding:3px 10px;border-radius:6px;cursor:pointer;">
-          ↻ Refresh
-        </button>
-      </div>
-      <div id="bday-audit-list"></div>
-    </div>
+    <!-- 0b. Birthday Gift Audit — REMOVED: never used, redundant with campaign_audit.html -->
 
-    <!-- 0c. Campaign Progress (MD view) -->
-    <div id="camp-progress-section" style="display:none;">
-      <div class="sec-lbl no-border" style="color:var(--blue);">📢 Campaign Progress</div>
-      <div id="camp-progress-list"></div>
-    </div>
+    <!-- 0c. Campaign Progress — MOVED to campaigns-mgmt-section below, Supabase-backed -->
 
     <!-- 0d. GistSync token (shown only if not configured) -->
     <div id="gist-token-banner" style="display:none;background:#fdf8ed;border:1px solid rgba(200,134,10,.3);border-radius:10px;padding:10px 14px;margin-bottom:10px;">
@@ -376,6 +381,25 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
     <div id="dropping-debtors-section" style="display:none;">
       <div class="sec-lbl">📉 Dropping Debtors — Volume Down vs Last Month</div>
       <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin:0 0 8px 2px;">Debtors who bought last month but reduced volume this month. Sorted by prev month CTN highest first. P-Personal excluded.</div>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;">
+        <span style="font-size:12px;color:var(--ink3);">Agent:</span>
+        <div style="position:relative;display:inline-block;" id="drop-agent-dropdown-wrap">
+          <div id="drop-agent-trigger" onclick="toggleDropAgentMenu()" 
+            style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);font-size:12px;min-width:160px;justify-content:space-between;">
+            <span id="drop-agent-label">All agents</span>
+            <span style="font-size:9px;opacity:0.5;">▼</span>
+          </div>
+          <div id="drop-agent-panel" style="display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:50;background:var(--card);border:1px solid var(--border);border-radius:6px;min-width:180px;padding:6px 0;">
+            <div style="padding:4px 10px 6px;border-bottom:1px solid var(--border);display:flex;gap:10px;margin-bottom:2px;">
+              <span onclick="dropAgentSelectAll()" style="font-size:11px;color:var(--accent);cursor:pointer;">All</span>
+              <span style="opacity:0.3;">·</span>
+              <span onclick="dropAgentClearAll()" style="font-size:11px;color:var(--ink3);cursor:pointer;">Clear</span>
+            </div>
+            <div id="drop-agent-list"></div>
+          </div>
+        </div>
+        <div id="drop-agent-pills" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+      </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;" id="drop-filter-row">
         <button onclick="setDropFilter('all',this)" class="lb-btn active" style="background:var(--ink);color:#fff;border-radius:6px;padding:4px 10px;">All</button>
         <button onclick="setDropFilter('stopped',this)" class="lb-btn" style="border-radius:6px;padding:4px 10px;">Stopped buying</button>
@@ -392,6 +416,31 @@ body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:10
       </div>
       <div class="card" style="padding:0;overflow:hidden;">
         <div id="dropping-debtors-list"></div>
+      </div>
+    </div>
+
+    <!-- 5e. Activity Map -->
+    <div id="activity-map-section">
+      <div class="sec-lbl">活动地图 / Activity Map</div>
+      <div class="card card-pad">
+        <div class="activity-toolbar">
+          <div>
+            <div style="font-family:var(--display);font-size:18px;letter-spacing:.05em;">Agent Daily Sales</div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">CTN and transaction count by date. Leave and rest days are overlaid.</div>
+          </div>
+          <div class="activity-nav">
+            <button class="activity-btn" onclick="changeActivityMonth(-1)">‹</button>
+            <div class="activity-month" id="activity-month-label">—</div>
+            <button class="activity-btn" onclick="changeActivityMonth(1)">›</button>
+          </div>
+        </div>
+        <div class="heat-scroll"><div id="activity-map-grid"></div></div>
+        <div class="activity-legend">
+          <span><span class="activity-pill al">AL</span> Annual leave</span>
+          <span><span class="activity-pill mc">MC</span> Medical leave</span>
+          <span><span class="activity-pill off">OFF</span> Day off</span>
+          <span>Grey cell = no sales / rest day / weekend</span>
+        </div>
       </div>
     </div>
 
@@ -801,6 +850,143 @@ async function loadData() {
   try { await pullGistData(); } catch(e) { console.warn('[mgmt] gist pull failed:', e); }
 }
 
+// ── Supabase module-level constants ──────────────────────────────────────
+// Declared at module scope so any function can call Supabase.
+// The two IIFEs (SupabaseKpiSync + GistSync) still have their own const
+// shadowed copies for backward compat — no conflict.
+const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
+
+const ACTIVITY_AGENTS = ['BEN','CJ','JACKY','JAMES','JW','KEAN','KEE','KF','KI-MI','KW','LEON','NMK','SAM','YI'];
+let activityMonthOffset = 0;
+
+function _activityMonthDate() {
+  const D = CURRENT_DATA || DATA || {};
+  const label = D.current_month || new Date().toLocaleDateString('en-US', {month:'short', year:'2-digit'});
+  const [mon, yy] = label.split(' ');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const idx = Math.max(0, months.indexOf(mon));
+  const year = 2000 + (parseInt(yy, 10) || parseInt(String(new Date().getFullYear()).slice(-2), 10));
+  return new Date(year, idx + activityMonthOffset, 1);
+}
+
+function _dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function _activityMonthBounds() {
+  const start = _activityMonthDate();
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  return { start, end, startKey: _dateKey(start), endKey: _dateKey(end) };
+}
+
+async function _activitySupabase(path) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!r.ok) throw new Error(await r.text());
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
+}
+
+async function _loadActivityCalendarMeta(startKey, endKey) {
+  const empty = { leaveByAgentDate: {}, offByAgent: {}, workdaysByAgent: {} };
+  try {
+    const [leaveRows, offRows, workRows] = await Promise.all([
+      _activitySupabase('agent_leave?select=*'),
+      _activitySupabase('agent_offdays?select=agent_name,off_days,default_day,exceptions'),
+      _activitySupabase(`agent_workdays?select=agent_name,month,working_days&month=eq.${startKey}`)
+    ]);
+    const leaveByAgentDate = {};
+    (leaveRows || []).forEach(r => {
+      const agent = (r.agent || r.agent_name || r.name_raw || '').toUpperCase();
+      const day = r.date || r.leave_date;
+      if (!agent || !day) return;
+      if (day < startKey || day > endKey) return;
+      leaveByAgentDate[`${agent}|${day}`] = (r.leave_type || 'OFF').toUpperCase();
+    });
+    const offByAgent = {};
+    (offRows || []).forEach(r => {
+      offByAgent[(r.agent_name || '').toUpperCase()] = {
+        default_day: r.default_day || (r.off_days || [])[0] || '',
+        off_days: r.off_days || [],
+        exceptions: r.exceptions || [],
+      };
+    });
+    const workdaysByAgent = {};
+    (workRows || []).forEach(r => { workdaysByAgent[(r.agent_name || '').toUpperCase()] = r.working_days; });
+    return { leaveByAgentDate, offByAgent, workdaysByAgent };
+  } catch (e) {
+    console.warn('[activity-map] calendar meta load failed:', e.message);
+    return empty;
+  }
+}
+
+function changeActivityMonth(delta) {
+  activityMonthOffset += delta;
+  renderActivityMap();
+}
+
+async function renderActivityMap() {
+  const el = document.getElementById('activity-map-grid');
+  if (!el) return;
+  const D = CURRENT_DATA || DATA || {};
+  const activity = D.agent_activity_daily || {};
+  const { start, end, startKey, endKey } = _activityMonthBounds();
+  const monthLabel = `${start.toLocaleString('en-US', {month:'short'})} ${String(start.getFullYear()).slice(-2)}`;
+  const label = document.getElementById('activity-month-label');
+  if (label) label.textContent = monthLabel.toUpperCase();
+
+  const days = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+  el.innerHTML = `<table class="activity-table">
+    <thead><tr>
+      <th class="activity-date activity-corner">Agent</th>
+      ${days.map(d => `<th class="activity-date"><b>${d.getDate()}</b><br>${d.toLocaleDateString('en-US', {weekday:'short'})}</th>`).join('')}
+    </tr></thead>
+    <tbody>${ACTIVITY_AGENTS.map(agent => `<tr><th class="activity-agent">${agent}</th>${days.map(() => '<td class="activity-cell zero">...</td>').join('')}</tr>`).join('')}</tbody>
+  </table>`;
+
+  const { leaveByAgentDate, offByAgent } = await _loadActivityCalendarMeta(startKey, endKey);
+  el.innerHTML = `<table class="activity-table">
+    <thead><tr>
+      <th class="activity-date activity-corner">Agent</th>
+      ${days.map(d => `<th class="activity-date"><b>${d.getDate()}</b><br>${d.toLocaleDateString('en-US', {weekday:'short'})}</th>`).join('')}
+    </tr></thead>
+    <tbody>${ACTIVITY_AGENTS.map(agent => {
+      const row = days.map(d => {
+        const key = _dateKey(d);
+        const dow = d.toLocaleDateString('en-US', {weekday:'short'});
+        const dowLong = d.toLocaleDateString('en-US', {weekday:'long'});
+        const sales = activity[agent]?.[key] || {ctn:0, txn:0};
+        const ctn = Math.round(Number(sales.ctn || 0));
+        const txn = Number(sales.txn || 0);
+        const leave = leaveByAgentDate[`${agent}|${key}`];
+        const weekend = d.getDay() === 0 || d.getDay() === 6;
+        const offCfg = offByAgent[agent] || {};
+        const exceptions = offCfg.exceptions || [];
+        const defaultDay = offCfg.default_day || '';
+        const legacyDays = offCfg.off_days || [];
+        const defaultOff = defaultDay === dowLong ||
+          (defaultDay === 'Sunday + Monday' && (dowLong === 'Sunday' || dowLong === 'Monday')) ||
+          legacyDays.includes(dowLong) || legacyDays.includes(dow);
+        const offDay = defaultOff && !exceptions.includes(key);
+        if (!leave && (weekend || offDay)) {
+          return `<td class="activity-cell ${weekend ? 'weekend' : 'off'}">—</td>`;
+        }
+        const zero = ctn === 0 && txn === 0;
+        const leaveClass = leave === 'AL' ? 'al' : leave === 'MC' ? 'mc' : 'off';
+        const pill = leave ? `<span class="activity-pill ${leaveClass}">${leave}</span>` : '';
+        return `<td class="activity-cell ${zero && !leave ? 'zero' : ''}">
+          ${zero && !leave ? '' : `<div>${ctn} CTN</div><div class="activity-txn">${txn} 单</div>`}
+          ${pill}
+        </td>`;
+      }).join('');
+      return `<tr><th class="activity-agent">${agent}</th>${row}</tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
 // ── SupabaseKpiSync Module ───────────────────────────────────────────────────
 // Fetches admin-entered kpi_manual values (new_accounts, vip_count, event_count)
 // from Supabase and overrides DATA.agents[*].kpi.items[*] + recomputes totals.
@@ -881,27 +1067,144 @@ const SupabaseKpiSync = (() => {
     agentData.kpi.max_abc   = maxABC;
     agentData.kpi.total_pct = maxABC > 0 ? Math.round(totalABC / maxABC * 100 * 10) / 10 : 0;
   }
+  async function fetch_birthday_claims(month) {
+    if (!month) return {};
+    const url = `${SUPABASE_URL}/rest/v1/claims?select=agent,status&month=eq.${encodeURIComponent(month)}&camp_id=eq.birthday_gift_auto`;
+    try {
+      const r = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      if (!r.ok) { console.warn(`[SupabaseKpiSync] birthday claims fetch failed: HTTP ${r.status}`); return {}; }
+      const rows = await r.json();
+      const byAgent = {};
+      rows.forEach(r => {
+        const a = (r.agent || '').toUpperCase();
+        if (!byAgent[a]) byAgent[a] = { verified: 0, excluded: 0 };
+        if (r.status === 'excluded') byAgent[a].excluded++;
+        else if (['claimed','delivered','verified'].includes(r.status)) byAgent[a].verified++;
+      });
+      return byAgent;
+    } catch (e) { console.warn('[SupabaseKpiSync] birthday fetch error:', e.message); return {}; }
+  }
+  function applyBirthdayOverride(dataObj, byAgent) {
+    if (!dataObj?.agents) return 0;
+    let applied = 0;
+    Object.entries(dataObj.agents).forEach(([agent, agentData]) => {
+      const bdayItem = agentData?.kpi?.items?.birthday_campaign;
+      if (!bdayItem) return;
+      const counts = byAgent[agent] || { verified: 0, excluded: 0 };
+      if (bdayItem.base_target == null) bdayItem.base_target = Number(bdayItem.target || 0);
+      const baseTarget = Number(bdayItem.base_target || 0);
+      const effectiveTarget = Math.max(0, baseTarget - counts.excluded);
+      bdayItem.excluded_count = counts.excluded;
+      bdayItem.target = effectiveTarget;
+      bdayItem.actual = counts.verified;
+      bdayItem.pct = effectiveTarget > 0 ? Math.round(counts.verified / effectiveTarget * 100 * 10) / 10 : 0;
+      bdayItem.score = _scoreItem(counts.verified, effectiveTarget, Number(bdayItem.weight || 0));
+      delete bdayItem.needs_supabase_fetch;
+      applied++;
+    });
+    return applied;
+  }
+  function recomputeAllTotals(dataObj) {
+    Object.values(dataObj.agents || {}).forEach(agentData => {
+      if (!agentData?.kpi?.items) return;
+      const items = agentData.kpi.items;
+      const sectionScores = {};
+      ['A','B','C','D','E'].forEach(sec => {
+        const secItems = Object.values(items).filter(v => v.section === sec);
+        sectionScores[sec] = {
+          score: Math.round(secItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000,
+          max_score: Math.round(secItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000,
+        };
+      });
+      agentData.kpi.section_scores = sectionScores;
+      const allItems = Object.values(items);
+      const grandTotal = Math.round(allItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+      const maxTotal = Math.round(allItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+      agentData.kpi.grand_total = grandTotal;
+      agentData.kpi.max_total = maxTotal;
+      agentData.kpi.grand_pct = maxTotal > 0 ? Math.round(grandTotal / maxTotal * 100 * 10) / 10 : 0;
+      const abcItems = allItems.filter(v => ['A','B','C'].includes(v.section));
+      const totalABC = Math.round(abcItems.reduce((s, v) => s + (v.score || 0), 0) * 1000) / 1000;
+      const maxABC = Math.round(abcItems.reduce((s, v) => s + (v.max_score || 0), 0) * 1000) / 1000;
+      agentData.kpi.total_abc = totalABC;
+      agentData.kpi.max_abc = maxABC;
+      agentData.kpi.total_pct = maxABC > 0 ? Math.round(totalABC / maxABC * 100 * 10) / 10 : 0;
+    });
+  }
   async function apply(dataObj) {
     const month = dataObj?.current_month;
     if (!month) return;
     const rows = await fetch_kpi_manual(month);
-    if (!rows.length) { console.log(`[SupabaseKpiSync] No kpi_manual rows for ${month}`); return; }
-    let applied = 0;
-    rows.forEach(row => {
-      const agentData = dataObj.agents?.[row.agent];
-      if (agentData) { applyAgentOverride(agentData, row); applied++; }
-    });
-    console.log(`[SupabaseKpiSync] Applied ${applied}/${rows.length} kpi_manual overrides for ${month}`);
+    if (rows.length) {
+      let applied = 0;
+      rows.forEach(row => {
+        const agentData = dataObj.agents?.[row.agent];
+        if (agentData) { applyAgentOverride(agentData, row); applied++; }
+      });
+      console.log(`[SupabaseKpiSync] Applied ${applied}/${rows.length} kpi_manual overrides for ${month}`);
+    } else { console.log(`[SupabaseKpiSync] No kpi_manual rows for ${month}`); }
+    const bdayByAgent = await fetch_birthday_claims(month);
+    const bdayApplied = applyBirthdayOverride(dataObj, bdayByAgent);
+    console.log(`[SupabaseKpiSync] Applied birthday claim counts for ${bdayApplied} agents`);
+    if (bdayApplied || rows.length) recomputeAllTotals(dataObj);
   }
-  return { apply, fetch_kpi_manual };
+  return { apply, fetch_kpi_manual, fetch_birthday_claims };
 })();
 
 async function loadCampaignSection() {
-  const r = await fetch('campaigns.json?v=' + Date.now());
-  if (!r.ok) return;
-  const camps = await r.json();
-  renderCampaignProgress(camps);
+  // Fetch campaigns.json + all claims for current month in parallel, then render.
+  const month = DATA?.current_month || '';
+  const [campsRes, supaClaims] = await Promise.all([
+    fetch('campaigns.json?v=' + Date.now()).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetchCampClaimsForMonth(month),
+  ]);
+  CAMP_CLAIMS_CACHE = supaClaims;
+  // campaigns.json shape is { campaigns: [...] } — unwrap to array
+  if (Array.isArray(campsRes)) {
+    CAMPS_CACHE = campsRes;
+  } else if (campsRes && Array.isArray(campsRes.campaigns)) {
+    CAMPS_CACHE = campsRes.campaigns;
+  } else {
+    CAMPS_CACHE = [];
+  }
+  console.log(`[campProg] Loaded ${CAMPS_CACHE.length} campaigns, ${CAMP_CLAIMS_CACHE.length} claims`);
+  renderCampaignsMgmt();
 }
+
+// Single Supabase query that returns ALL claims for this month — used by campaign progress.
+// Paginates past 1000-row default limit. Hard cap at 10000 rows to avoid runaway.
+async function fetchCampClaimsForMonth(month) {
+  if (!month) return [];
+  const pageSize = 1000;
+  const maxPages = 10;
+  const all = [];
+  try {
+    for (let page = 0; page < maxPages; page++) {
+      const from = page * pageSize;
+      const to   = from + pageSize - 1;
+      const url = `${SUPABASE_URL}/rest/v1/claims?select=agent,camp_id,debtor_code,status&month=eq.${encodeURIComponent(month)}&order=ts.desc`;
+      const r = await fetch(url, {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          Range: `${from}-${to}`,
+        }
+      });
+      if (!r.ok) { console.warn(`[campProg] claims fetch HTTP ${r.status} at page ${page}`); break; }
+      const rows = await r.json();
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      all.push(...rows);
+      if (rows.length < pageSize) break;   // last page
+    }
+    return all;
+  } catch (e) {
+    console.warn('[campProg] claims fetch error:', e.message);
+    return all;
+  }
+}
+
+let CAMP_CLAIMS_CACHE = [];
+let CAMPS_CACHE       = [];
 
 async function pullGistData() {
   if (!GistSync.isConfigured()) return;
@@ -912,72 +1215,8 @@ async function pullGistData() {
     try { localStorage.setItem(FLAGS_KEY, JSON.stringify(gistFlags)); } catch(e) {}
     renderPendingActions();
   }
-  const gistClaims = await GistSync.pull('claims_' + month);
-  if (gistClaims) {
-    Object.entries(gistClaims).forEach(([k, v]) => {
-      try { localStorage.setItem('camp_claim_' + month + '_' + k, JSON.stringify(v)); } catch(e) {}
-    });
-    renderBdayAudit();
-  }
 }
 
-function renderCampaignProgress(camps) {
-  const el = document.getElementById('camp-progress-section');
-  if (!el || !Array.isArray(camps)) return;
-  const month = DATA?.current_month || '';
-  const activeCamps = camps.filter(c => c.active !== false);
-  if (!activeCamps.length) { el.style.display = 'none'; return; }
-  el.style.display = 'block';
-  const list = document.getElementById('camp-progress-list');
-  if (!list) return;
-  list.innerHTML = activeCamps.map(c => {
-    const agents = Object.keys(DATA?.agents || {});
-    const rows = agents.map(agent => {
-      const slug = month.replace(' ','');
-      const claimKey = 'camp_claim_' + slug + '_' + agent + '_' + (c.id || c.name);
-      let claim = null;
-      try { claim = JSON.parse(localStorage.getItem(claimKey) || 'null'); } catch(ex) {}
-      const done = claim?.status === 'done' || claim?.status === 'approved';
-      const col  = done ? '#2a7a4b' : '#9a9590';
-      return `<div class="camp-agent-row">
-        <div class="camp-agent-lbl">${agent}</div>
-        <div class="camp-bar-bg"><div class="camp-bar-fill" style="width:${done?100:0}%;background:${col};"></div></div>
-        <div class="camp-stat" style="color:${col};">${done ? '\u2713' : '\u2014'}</div>
-        <div style="display:flex;gap:4px;justify-content:flex-end;">
-          <button onclick="mdApproveCamp('${agent}','${c.id||c.name}',true)"
-            style="background:rgba(42,122,75,.15);border:1px solid rgba(42,122,75,.3);color:#2a7a4b;font-family:var(--mono);font-size:8px;padding:3px 7px;border-radius:5px;cursor:pointer;">OK</button>
-          <button onclick="mdApproveCamp('${agent}','${c.id||c.name}',false)"
-            style="background:rgba(200,56,26,.1);border:1px solid rgba(200,56,26,.3);color:#c8381a;font-family:var(--mono);font-size:8px;padding:3px 7px;border-radius:5px;cursor:pointer;">No</button>
-        </div>
-      </div>`;
-    }).join('');
-    return `<div class="camp-prog-card">
-      <div class="camp-prog-header">
-        <div class="camp-prog-name">${c.name || c.id || ''}</div>
-        <div class="camp-prog-meta">${c.desc || ''}</div>
-      </div>
-      ${rows}
-    </div>`;
-  }).join('');
-}
-
-async function mdApproveCamp(agent, campId, approve) {
-  const month = (DATA?.current_month || '').replace(' ','');
-  const claimKey = 'camp_claim_' + month + '_' + agent + '_' + campId;
-  let existing = null;
-  try { existing = JSON.parse(localStorage.getItem(claimKey) || 'null'); } catch(ex) {}
-  const updated = Object.assign({}, existing || {}, { status: approve ? 'approved' : 'rejected', md_action: Date.now() });
-  try { localStorage.setItem(claimKey, JSON.stringify(updated)); } catch(ex) {}
-  if (GistSync.isConfigured()) {
-    try {
-      const claims = {};
-      Object.keys(localStorage).filter(k => k.startsWith('camp_claim_' + month + '_'))
-        .forEach(k => { try { claims[k.replace('camp_claim_' + month + '_', '')] = JSON.parse(localStorage.getItem(k)); } catch(ex) {} });
-      await GistSync.push('claims_' + month, claims);
-    } catch(ex) { console.warn('[mdApproveCamp] gist sync failed', ex); }
-  }
-  try { await loadCampaignSection(); } catch(ex) {}
-}
 
 function renderOverview() {
   const D = CURRENT_DATA || DATA;
@@ -1027,7 +1266,6 @@ function renderOverview() {
   document.getElementById('ov-ma').textContent=fi(team.team_ma_ctn);
 
   renderPendingActions();
-  renderBdayAudit();
   renderCampaignsMgmt();
   renderAnnualProgress();
   renderLeaderboard();
@@ -1037,6 +1275,7 @@ function renderOverview() {
   renderBrandSkuStatus();
   renderBrandVolumeAlert();
   renderDroppingDebtors();
+  renderActivityMap();
   renderNewbieProgress();
   renderAgingOverview();
   renderMonthlySummary();
@@ -1215,11 +1454,11 @@ function renderMonthlySummary() {
     const normalPct = sp.tiers?.normal_t1?.pct || 0;
     const maPct     = sp.tiers?.ma?.pct || 0;
 
-    // KPI actuals — merge live scores
-    const newAcc  = dc.debtors?.filter(d=>d.is_new).length || 0;
+    // KPI actuals — use Supabase-overridden values from kpiItems (set by SupabaseKpiSync)
+    const newAcc  = kpiItems.new_accounts?.actual ?? dc.debtors?.filter(d=>d.is_new).length ?? 0;
     const newAccTgt = kpiItems.new_accounts?.target || 0;
 
-    const vipAct  = dc.debtors?.filter(d=>d.vip && d.status==='active').length || 0;
+    const vipAct  = kpiItems.vip_count?.actual ?? dc.debtors?.filter(d=>d.vip && d.status==='active').length ?? 0;
     const vipTgt  = kpiItems.vip_count?.target || 0;
 
     const reactAct = dc.reactivation_count || 0;
@@ -1982,183 +2221,6 @@ async function saveFlags(f) {
     try { await GistSync.push('flags_' + month, f); } catch(e) { console.warn('[mgmt] flags gist sync failed', e); }
   }
 }
-function renderBdayAudit() {
-  const el = document.getElementById('bday-audit-list');
-  const sec = document.getElementById('bday-audit-section');
-  if (!el || !CURRENT_DATA) return;
-
-  const bdayCamp = CURRENT_DATA.birthday_campaign || {};
-  const byAgent  = bdayCamp.by_agent || {};
-  const agents   = CURRENT_DATA.agents || {};
-
-  // Find agents who have birthday targets this month
-  const rows = Object.entries(byAgent).filter(([,cnt]) => cnt > 0);
-
-  if (!rows.length) { sec.style.display = 'none'; return; }
-  sec.style.display = 'block';
-
-  // Pull live birthday counts from GistSync KPI scores if available
-  const month   = DATA?.current_month || '';
-  const slug    = month.replace(' ','');
-  let liveScores = {};
-  try { liveScores = JSON.parse(localStorage.getItem('md_scores_' + slug) || '{}'); } catch(e) {}
-
-  el.innerHTML = rows.map(([agent, target]) => {
-    const kpi    = agents[agent]?.kpi?.items?.birthday_campaign || {};
-    // Priority: live GistSync KPI score → JSON KPI actual
-    const liveActual = liveScores[agent]?.birthday_campaign ?? null;
-    const actual = liveActual !== null ? liveActual : (kpi.actual ?? null);
-    const done   = actual !== null;
-    const pct    = target > 0 && actual !== null ? Math.min(actual/target*100, 100) : 0;
-    const col    = pct >= 100 ? '#2a7a4b' : pct >= 60 ? '#c8860a' : '#c8381a';
-
-    // Check if MD already approved
-    const mdClaims = (() => { try { return JSON.parse(localStorage.getItem('md_bday_claims_' + slug) || '{}'); } catch(e) { return {}; } })();
-    const mdApproved = mdClaims[agent]?.md_approved || false;
-    const mdOverride = mdClaims[agent]?.md_override ?? null;
-    const displayActual = mdOverride !== null ? mdOverride : actual;
-
-    if (mdApproved) {
-      // Collapsed approved state
-      return `<div style="background:rgba(42,122,75,.08);border:1px solid rgba(42,122,75,.3);border-radius:12px;padding:10px 14px;margin-bottom:8px;border-left:4px solid #2a7a4b;display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <div style="font-family:var(--display);font-size:16px;letter-spacing:.05em;color:#2a7a4b;">✓ ${agent}</div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">Approved · ${displayActual ?? target} / ${target} debtors</div>
-        </div>
-        <button onclick="auditBday('${agent}','undo')"
-          style="background:rgba(200,56,26,.1);border:1px solid rgba(200,56,26,.3);color:#c8381a;font-family:var(--mono);font-size:9px;padding:3px 10px;border-radius:6px;cursor:pointer;">
-          ↩ Undo
-        </button>
-      </div>`;
-    }
-
-    return `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:8px;border-left:4px solid ${done?col:'rgba(255,255,255,.15)'};">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div>
-          <div style="font-family:var(--display);font-size:18px;letter-spacing:.05em;">${agent}</div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">
-            Birthday debtors: ${target} &nbsp;·&nbsp;
-            ${done
-              ? `${mdOverride !== null ? 'MD Adjusted' : 'Self-reported'}: <span style="color:${col};font-weight:600;">${displayActual}</span>`
-              : `<span style="color:#c8381a;">Not yet reported</span>`}
-          </div>
-        </div>
-        <div style="text-align:right;">
-          ${done
-            ? `<div style="font-family:var(--display);font-size:22px;color:${col}">${pct.toFixed(0)}%</div>`
-            : `<span style="font-family:var(--mono);font-size:9px;color:#c8381a;">Pending</span>`}
-        </div>
-      </div>
-      ${done ? `
-      <div style="height:4px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden;margin-bottom:8px;">
-        <div style="height:100%;width:${pct}%;background:${col};border-radius:2px;"></div>
-      </div>` : ''}
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button onclick="auditBday('${agent}','approve',${target})"
-          style="background:rgba(42,122,75,.2);border:1px solid rgba(42,122,75,.4);color:#2a7a4b;font-family:var(--mono);font-size:9px;padding:4px 10px;border-radius:6px;cursor:pointer;">
-          ✓ Approve
-        </button>
-
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function showMgmtToast(msg, color) {
-  color = color || '#2a7a4b';
-  let t = document.getElementById('mgmt-toast');
-  if (!t) {
-    t = document.createElement('div');
-    t.id = 'mgmt-toast';
-    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;font-family:var(--mono);font-size:11px;padding:10px 20px;border-radius:10px;z-index:9999;transition:opacity .3s;pointer-events:none;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,.3);';
-    document.body.appendChild(t);
-  }
-  t.textContent = msg;
-  t.style.borderLeft = '4px solid ' + color;
-  t.style.opacity = '1';
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => { t.style.opacity = '0'; }, 2500);
-}
-
-async function auditBday(agent, action, target) {
-  const month    = (DATA?.current_month || '').replace(' ','');
-  const curMonth = DATA?.current_month || '';
-  const gistKey  = 'claims_' + month;
-  let claims = {};
-  try { claims = JSON.parse(localStorage.getItem('md_bday_claims_' + month) || '{}'); } catch(e) {}
-
-  if (action === 'approve') {
-    const bdayDebtors = (CURRENT_DATA?.birthday_campaign?.debtors || DATA?.birthday_campaign?.debtors || [])
-      .filter(d => d.agent === agent);
-    const approvedCount = target || (CURRENT_DATA?.birthday_campaign?.by_agent?.[agent] ?? bdayDebtors.length);
-    bdayDebtors.forEach(d => {
-      const k = 'bday_gift_' + agent + '_' + d.code + '_' + month;
-      try { localStorage.setItem(k, '1'); } catch(e) {}
-    });
-    claims[agent] = Object.assign({}, claims[agent] || {}, {
-      md_approved: true, approved_at: Date.now(), count: approvedCount
-    });
-    try { localStorage.setItem('md_bday_claims_' + month, JSON.stringify(claims)); } catch(e) {}
-    let scores = {};
-    try { scores = JSON.parse(localStorage.getItem('md_scores_' + month) || '{}'); } catch(e) {}
-    if (!scores[agent]) scores[agent] = {};
-    scores[agent].birthday_campaign = approvedCount;
-    try { localStorage.setItem('md_scores_' + month, JSON.stringify(scores)); } catch(e) {}
-    if (GistSync.isConfigured()) {
-      try {
-        await GistSync.push(gistKey, claims);
-        let campClaims = {};
-        try { campClaims = await GistSync.pull('claims_' + month) || {}; } catch(e) {}
-        bdayDebtors.forEach(d => {
-          campClaims['bday_gift_' + agent + '_' + d.code] = '1';
-        });
-        await GistSync.push('claims_' + month, campClaims);
-        let allKpi = {};
-        try { allKpi = await GistSync.pull('kpi_scores') || {}; } catch(e) {}
-        if (!allKpi[curMonth]) allKpi[curMonth] = {};
-        if (!allKpi[curMonth][agent]) allKpi[curMonth][agent] = {};
-        allKpi[curMonth][agent].birthday_campaign = approvedCount;
-        await GistSync.push('kpi_scores', allKpi);
-      } catch(e) { console.warn('[auditBday] gist sync failed', e); }
-    }
-    showMgmtToast('✓ ' + agent + ' approved — ' + approvedCount + ' debtors', '#2a7a4b');
-    renderBdayAudit();
-
-  } else if (action === 'adjust') {
-    const adj = prompt('Adjust birthday gift count for ' + agent + ':');
-    if (adj !== null && !isNaN(+adj)) {
-      let scores = {};
-      try { scores = JSON.parse(localStorage.getItem('md_scores_' + month) || '{}'); } catch(e) {}
-      if (!scores[agent]) scores[agent] = {};
-      scores[agent].birthday_campaign = +adj;
-      try { localStorage.setItem('md_scores_' + month, JSON.stringify(scores)); } catch(e) {}
-      claims[agent] = Object.assign({}, claims[agent] || {}, { md_override: +adj, adjusted_at: Date.now() });
-      try { localStorage.setItem('md_bday_claims_' + month, JSON.stringify(claims)); } catch(e) {}
-      if (GistSync.isConfigured()) {
-        try {
-          await GistSync.push(gistKey, claims);
-          let allKpi = {};
-          try { allKpi = await GistSync.pull('kpi_scores') || {}; } catch(e) {}
-          if (!allKpi[curMonth]) allKpi[curMonth] = {};
-          if (!allKpi[curMonth][agent]) allKpi[curMonth][agent] = {};
-          allKpi[curMonth][agent].birthday_campaign = +adj;
-          await GistSync.push('kpi_scores', allKpi);
-        } catch(e) { console.warn('[auditBday] gist sync failed', e); }
-      }
-      showMgmtToast('✓ ' + agent + ' birthday gift adjusted to ' + adj, '#c8860a');
-      renderBdayAudit();
-    }
-
-  } else if (action === 'undo') {
-    delete claims[agent];
-    try { localStorage.setItem('md_bday_claims_' + month, JSON.stringify(claims)); } catch(e) {}
-    if (GistSync.isConfigured()) {
-      try { await GistSync.push(gistKey, claims); } catch(e) {}
-    }
-    showMgmtToast(agent + ' approval undone', '#c8381a');
-    renderBdayAudit();
-  }
-}
 
 // ── Campaign Progress (management view) ───────────────────────────────────
 function renderCampaignsMgmt() {
@@ -2166,30 +2228,40 @@ function renderCampaignsMgmt() {
   const list    = document.getElementById('campaigns-mgmt-list');
   if (!section || !list) return;
 
-  let campaigns = [];
-  try {
-    const raw = localStorage.getItem('touro_campaigns');
-    if (raw) campaigns = JSON.parse(raw).campaigns || [];
-  } catch(e) {}
+  // Campaigns come from CAMPS_CACHE (populated by loadCampaignSection).
+  // Fallback to localStorage touro_campaigns if cache is empty.
+  let campaigns = Array.isArray(CAMPS_CACHE) && CAMPS_CACHE.length ? CAMPS_CACHE : [];
+  if (!campaigns.length) {
+    try {
+      const raw = localStorage.getItem('touro_campaigns');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        campaigns = Array.isArray(parsed) ? parsed : (parsed.campaigns || []);
+      }
+    } catch(e) {}
+  }
 
-  const active = campaigns.filter(c => c.active);
+  const active = campaigns.filter(c => c.active !== false);
   if (!active.length) { section.style.display = 'none'; return; }
   section.style.display = 'block';
 
-  const month  = DATA?.current_month || '';
-  const slug   = month.replace(' ', '');
   const AGENTS = Object.keys(DATA?.agents || {});
 
-  function getClaims(campId) {
-    const claims = {};
-    Object.keys(localStorage)
-      .filter(k => k.startsWith(`camp_claim_${slug}_`) && k.includes(`_${campId}_`))
-      .forEach(k => {
-        const raw  = k.replace(`camp_claim_${slug}_`, '');
-        const data = JSON.parse(localStorage.getItem(k) || 'null');
-        if (data) claims[raw] = data;
-      });
-    return claims;
+  // Build debtor name lookup across ALL agents' debtor_cards.
+  // Used to resolve off-list debtor codes → friendly names.
+  const debtorNameMap = {};  // UPPER(code) → "NAME" or "NAME (owner: AGENT)"
+  AGENTS.forEach(ag => {
+    const cards = DATA?.agents?.[ag]?.debtor_cards || {};
+    Object.entries(cards).forEach(([code, d]) => {
+      const key = (code || '').toUpperCase();
+      if (!debtorNameMap[key]) {
+        debtorNameMap[key] = { name: d.company_name || d.name || '', owner: ag };
+      }
+    });
+  });
+  function resolveDebtor(code) {
+    const key = (code || '').toUpperCase();
+    return debtorNameMap[key] || null;
   }
 
   const CONDITION_LABEL = {
@@ -2203,108 +2275,260 @@ function renderCampaignsMgmt() {
     promotion:'#1a5c8f', festive_gift:'#6b3fa0', other:'#555'
   };
 
-  list.innerHTML = active.map(camp => {
-    const claims   = getClaims(camp.id);
+  // Get the target pool (authoritative debtor list) for a campaign
+  function getCampaignPool(camp) {
+    const isBday = camp.type === 'birthday_gift' || camp.id === 'birthday_gift_auto';
+    if (isBday) {
+      return (DATA?.birthday_campaign?.debtors || []).map(d => ({
+        agent: d.agent,
+        code:  (d.code || d.debtor_code || '').toUpperCase(),
+        name:  d.name || d.company_name || d.code || '',
+      }));
+    }
+    return (camp.debtors || []).map(d => ({
+      agent: d.agent,
+      code:  (d.code || d.debtor_code || '').toUpperCase(),
+      name:  d.name || d.company_name || d.code || '',
+    }));
+  }
 
-    // Deduplicate by debtor code — old bulk mark wrote records for every agent
-    // We want unique debtors, not unique agent×debtor combinations
-    const debtorStatuses = {}; // debtorCode → best status
-    Object.entries(claims).forEach(([key, c]) => {
-      // key format: agent_campId_debtorCode
-      const parts = key.split('_');
-      const debtorCode = parts[parts.length - 1];
-      const s = c.status || ((c.ts || c.bulk) ? 'delivered' : 'pending');
-      // Priority: delivered > refused > next_visit > not_in > removed > pending
-      const priority = { delivered:5, refused:4, next_visit:3, not_in:2, removed:1, pending:0 };
-      if (!debtorStatuses[debtorCode] || (priority[s]||0) > (priority[debtorStatuses[debtorCode]]||0)) {
-        debtorStatuses[debtorCode] = s;
+  const DELIV_STATUSES = new Set(['claimed','delivered','verified']);
+
+  // Compute stats per campaign (Option 4: auto-expand pool for FOC/Promo)
+  const campStats = active.map(camp => {
+    const isBday = camp.type === 'birthday_gift' || camp.id === 'birthday_gift_auto';
+    const pool   = getCampaignPool(camp);
+    const listCodes = new Set(pool.map(d => d.code));
+    // Pull Supabase claims for THIS campaign
+    const campClaims = (CAMP_CLAIMS_CACHE || []).filter(r => r.camp_id === camp.id);
+
+    const poolByAgent = {};
+    const poolCodes = new Set(pool.map(d => (d.code || '').toUpperCase()));
+    const poolHasAgent = pool.some(d => d.agent && d.agent.trim() !== '');
+    if (poolHasAgent) {
+      // Future campaigns: agent field present in pool
+      pool.forEach(d => {
+        const ag = (d.agent || '').toUpperCase();
+        if (!ag) return;
+        if (!poolByAgent[ag]) poolByAgent[ag] = [];
+        poolByAgent[ag].push(d);
+      });
+    } else {
+      // Legacy campaigns: no agent field — derive from claims (on-list only)
+      campClaims.forEach(r => {
+        const ag = (r.agent || '').toUpperCase();
+        const code = (r.debtor_code || '').toUpperCase();
+        if (!poolCodes.has(code)) return;
+        if (!poolByAgent[ag]) poolByAgent[ag] = new Set();
+        poolByAgent[ag].add(code);
+      });
+    }
+    // Normalize — ensure all AGENTS have an entry
+    AGENTS.forEach(ag => {
+      const val = poolByAgent[ag];
+      poolByAgent[ag] = val instanceof Set ? [...val] : (val || []);
+    });
+    const isLegacyPool = !poolHasAgent;
+
+    // Per-agent rollup
+    const perAgent = {};   // agent → { poolCount, delivered, onListDelivered, offListDelivered, excluded, offListCodes:[] }
+    AGENTS.forEach(ag => {
+      perAgent[ag] = {
+        poolCount: (poolByAgent[ag] || []).length,
+        delivered: 0,
+        onListDelivered: 0,
+        offListDelivered: 0,
+        excluded: 0,
+        offListCodes: [],   // array of {code, name, owner}
+      };
+    });
+
+    // First pass — walk through claims, bucket by agent + on/off list
+    campClaims.forEach(r => {
+      const ag = (r.agent || '').toUpperCase();
+      if (!perAgent[ag]) return;  // unknown agent, skip
+      const code = (r.debtor_code || '').toUpperCase();
+      const status = r.status;
+      if (status === 'excluded') {
+        perAgent[ag].excluded++;
+        return;
+      }
+      if (!DELIV_STATUSES.has(status)) return;  // ignore rejected/unknown
+
+      perAgent[ag].delivered++;
+      if (listCodes.has(code)) {
+        perAgent[ag].onListDelivered++;
+      } else {
+        perAgent[ag].offListDelivered++;
+        if (!isBday) {   // only track off-list for non-birthday (Option 4 rule)
+          const resolved = resolveDebtor(code);
+          perAgent[ag].offListCodes.push({
+            code: code,
+            name: resolved ? resolved.name : '',
+            owner: resolved ? resolved.owner : '',
+          });
+        }
       }
     });
 
-    // Use camp.debtors length as pool if available
-    // For birthday campaigns: use DATA.birthday_campaign.debtors as the authoritative pool
-    const isBdayCamp     = camp.type === 'birthday_gift' || camp.id === 'birthday_gift_auto';
-    const bdayPool       = isBdayCamp ? (DATA?.birthday_campaign?.debtors || []) : [];
-    const poolFromDebtors = isBdayCamp
-      ? bdayPool.length
-      : (camp.debtors?.length || 0);
-    const uniqueDebCodes  = Object.keys(debtorStatuses);
-    // Pool = uploaded list > birthday DATA pool > fall back to unique claims
-    const poolSize        = poolFromDebtors || uniqueDebCodes.length;
-
-    let delivered = 0, refused = 0, removed = 0, nextVisit = 0, notIn = 0;
-    Object.values(debtorStatuses).forEach(s => {
-      if      (s === 'delivered')  delivered++;
-      else if (s === 'refused')    refused++;
-      else if (s === 'removed')    removed++;
-      else if (s === 'next_visit') nextVisit++;
-      else if (s === 'not_in')     notIn++;
+    // Compute agent-level pool/pct
+    Object.entries(perAgent).forEach(([ag, a]) => {
+      if (isBday) {
+        a.effPool = Math.max(0, a.poolCount - a.excluded);
+        // For birthday: don't expand pool with off-list. Off-list birthday is a data concern.
+        a.pct = a.effPool > 0 ? Math.min(100, Math.round(a.onListDelivered / a.effPool * 100)) : 0;
+        a.yet = Math.max(0, a.effPool - a.onListDelivered);
+      } else {
+        // Option 4: pool expands by off-list deliveries
+        a.effPool = Math.max(0, a.poolCount + a.offListDelivered - a.excluded);
+        a.pct = a.effPool > 0 ? Math.min(100, Math.round(a.delivered / a.effPool * 100)) : 0;
+        a.yet = Math.max(0, a.effPool - a.delivered);
+      }
     });
-    const activePool = Math.max(poolSize - removed, delivered); // never less than delivered
-    const pending    = Math.max(activePool - delivered - refused - nextVisit - notIn, 0);
-    const pct        = activePool > 0 ? Math.min(Math.round(delivered / activePool * 100), 100) : 0;
-    const pctCol     = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--gold)' : 'var(--accent)';
 
-    const focCost   = parseFloat(camp.foc_cost_unit) || 0;
-    const focActual = delivered * focCost;
-    const focCap    = parseFloat(camp.foc_budget_cap) || 0;
-    const focPct    = focCap > 0 ? Math.min(Math.round(focActual / focCap * 100), 100) : 0;
-    const focWarn   = focPct >= 90;
+    // Campaign-level aggregates
+    const totalPoolCount     = pool.length;
+    const totalExcluded      = Object.values(perAgent).reduce((s,a) => s + a.excluded, 0);
+    const totalOnList        = Object.values(perAgent).reduce((s,a) => s + a.onListDelivered, 0);
+    const totalOffList       = Object.values(perAgent).reduce((s,a) => s + a.offListDelivered, 0);
+    const allOffListCodes    = Object.entries(perAgent)
+      .flatMap(([ag, a]) => a.offListCodes.map(c => ({ ...c, agent: ag })));
 
-    const agentRows = AGENTS.map(agent => {
-      const agDebtors = (camp.debtors || []).filter(d => d.agent === agent);
-      if (!agDebtors.length) return null;
-      let agDeliv = 0, agRemoved = 0;
-      agDebtors.forEach(d => {
-        const key   = `${agent}_${camp.id}_${d.code || d.debtor_code}`;
-        const claim = claims[key];
-        if (!claim) return;
-        if (claim.status === 'removed') agRemoved++;
-        else if (claim.status === 'delivered' || (!claim.status && claim.ts)) agDeliv++;
-      });
-      const agActive = agDebtors.length - agRemoved;
-      const agPct    = agActive > 0 ? Math.min(Math.round(agDeliv / agActive * 100), 100) : 0;
-      const agCol    = agPct >= 80 ? 'var(--green)' : agPct >= 50 ? 'var(--gold)' : 'var(--accent)';
-      const agFOC    = focCost > 0 ? ` · RM ${(agDeliv * focCost).toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '';
-      const rmLabel  = agRemoved > 0 ? ` · <span style="color:var(--purple);">${agRemoved} removed</span>` : '';
-      return `
-      <div style="display:grid;grid-template-columns:64px 1fr 44px;gap:8px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--border);">
-        <div style="font-family:var(--display);font-size:15px;letter-spacing:.04em;">${agent}</div>
-        <div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">${agDeliv}/${agActive} delivered${agFOC}${rmLabel}</div>
-          <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:3px;">
-            <div style="height:100%;width:${agPct}%;background:${agCol};border-radius:2px;transition:width .4s;"></div>
-          </div>
-        </div>
-        <div style="font-family:var(--mono);font-size:11px;font-weight:500;color:${agCol};text-align:right;">${agPct}%</div>
-      </div>`;
-    }).filter(Boolean).join('');
+    let effPool, delivered, totalYet, pct;
+    if (isBday) {
+      effPool   = Math.max(0, totalPoolCount - totalExcluded);
+      delivered = totalOnList;  // birthday counts on-list only
+      totalYet  = Math.max(0, effPool - delivered);
+      pct       = effPool > 0 ? Math.min(100, Math.round(delivered / effPool * 100)) : 0;
+    } else {
+      // Option 4: pool auto-expands
+      effPool   = Math.max(0, totalPoolCount + totalOffList - totalExcluded);
+      delivered = totalOnList + totalOffList;
+      totalYet  = Math.max(0, effPool - delivered);
+      pct       = effPool > 0 ? Math.min(100, Math.round(delivered / effPool * 100)) : 0;
+    }
 
+    return {
+      camp, isBday, perAgent, totalPoolCount, totalExcluded,
+      totalOnList, totalOffList, allOffListCodes,
+      effPool, delivered, totalYet, pct,
+    };
+  });
+
+  // Sort worst → best, zero-pool at end
+  campStats.sort((a, b) => {
+    if (a.effPool === 0 && b.effPool > 0) return 1;
+    if (b.effPool === 0 && a.effPool > 0) return -1;
+    return a.pct - b.pct;
+  });
+
+  function deadlineMeta(deadlineStr) {
+    if (!deadlineStr) return '';
+    try {
+      const d = new Date(deadlineStr);
+      if (isNaN(d.getTime())) return `⏰ ${deadlineStr}`;
+      const days = Math.ceil((d.getTime() - Date.now()) / 86400000);
+      if (days < 0)       return `<span style="color:#c8381a;">⚠ Overdue ${-days}d</span>`;
+      if (days <= 3)      return `<span style="color:#c8381a;">⚠ Due in ${days}d</span>`;
+      if (days <= 7)      return `<span style="color:#c8860a;">⏰ Due in ${days}d</span>`;
+      return `⏰ ${deadlineStr}`;
+    } catch(e) { return `⏰ ${deadlineStr}`; }
+  }
+  function barColor(pct) { return pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--gold)' : 'var(--accent)'; }
+
+  const headerBar = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-family:var(--mono);font-size:9px;">
+      <div style="color:var(--ink3);">Sorted by lowest completion first · ${active.length} active campaign${active.length===1?'':'s'}</div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="toggleAllCampCards(true)"
+          style="background:rgba(0,0,0,.04);border:1px solid var(--border);color:var(--ink2);padding:3px 10px;border-radius:6px;font-family:var(--mono);font-size:9px;cursor:pointer;">Open all</button>
+        <button onclick="toggleAllCampCards(false)"
+          style="background:rgba(0,0,0,.04);border:1px solid var(--border);color:var(--ink2);padding:3px 10px;border-radius:6px;font-family:var(--mono);font-size:9px;cursor:pointer;">Close all</button>
+      </div>
+    </div>`;
+
+  list.innerHTML = headerBar + campStats.map(stats => {
+    const { camp, isBday, perAgent, totalPoolCount, totalExcluded,
+            totalOnList, totalOffList, allOffListCodes,
+            effPool, delivered, totalYet, pct } = stats;
     const accentCol = TYPE_COLORS[camp.type] || 'var(--accent)';
+    const pctCol    = barColor(pct);
     const cardId    = `camp-card-${camp.id}`;
 
-    return `
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:10px;overflow:hidden;" id="${cardId}">
-      <div style="height:3px;background:${accentCol};"></div>
+    // Breakdown line under summary:
+    let breakdown = '';
+    if (isBday) {
+      if (totalExcluded > 0) breakdown = ` <span style="color:#ff8866;">· ${totalExcluded} excluded</span>`;
+    } else {
+      const parts = [];
+      parts.push(`${totalPoolCount} target list`);
+      if (totalOffList > 0)  parts.push(`<span style="color:var(--purple);">+${totalOffList} off-list</span>`);
+      if (totalExcluded > 0) parts.push(`<span style="color:#ff8866;">−${totalExcluded} excluded</span>`);
+      if (parts.length > 1 || totalOffList > 0 || totalExcluded > 0) {
+        breakdown = `<br><span style="color:var(--ink3);font-size:8px;">(${parts.join(' · ')})</span>`;
+      }
+    }
 
-      <!-- ── Clickable header — always visible ── -->
+    // Per-agent rows (sorted worst first)
+    const agentRows = AGENTS
+      .filter(ag => perAgent[ag].poolCount > 0 || perAgent[ag].delivered > 0)
+      .sort((a, b) => perAgent[a].pct - perAgent[b].pct)
+      .map(ag => {
+        const a = perAgent[ag];
+        const col  = barColor(a.pct);
+        const yetTxt = a.yet > 0 ? `<span style="color:var(--accent);">${a.yet} yet</span>` : `✓`;
+        const excTxt = a.excluded > 0 ? ` · <span style="color:#ff8866;">${a.excluded} excl</span>` : '';
+        const offTxt = (!isBday && a.offListDelivered > 0)
+          ? ` · <span style="color:var(--purple);">+${a.offListDelivered} off-list</span>` : '';
+        // Display: delivered/effPool (from target list size)
+        const poolTxt = `${a.delivered}/${a.effPool}`;
+        return `
+        <div style="display:grid;grid-template-columns:64px 1fr 50px;gap:10px;align-items:center;padding:6px 14px;border-top:1px solid var(--border);">
+          <div style="font-family:var(--display);font-size:14px;letter-spacing:.04em;">${ag}</div>
+          <div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-bottom:2px;">${poolTxt} delivered · ${yetTxt}${excTxt}${offTxt}</div>
+            <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+              <div style="height:100%;width:${a.pct}%;background:${col};border-radius:2px;transition:width .4s;"></div>
+            </div>
+          </div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:500;color:${col};text-align:right;">${a.pct}%</div>
+        </div>`;
+      }).join('');
+
+    // Off-list drill-down section (only for non-birthday campaigns with off-list deliveries)
+    const offListSection = (!isBday && allOffListCodes.length > 0) ? `
+        <div style="border-top:1px solid var(--border);padding:10px 14px;background:rgba(107,63,160,.04);">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--purple);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">
+            Off-List Deliveries (${allOffListCodes.length})
+          </div>
+          ${allOffListCodes.map(d => {
+            const unknownTag = !d.name ? ` <span style="color:#c8381a;">(unknown debtor)</span>` : '';
+            const ownerTag   = (d.owner && d.owner !== d.agent)
+              ? ` <span style="color:var(--ink3);">(owner: ${d.owner})</span>` : '';
+            return `<div style="font-family:var(--mono);font-size:10px;color:var(--ink3);padding:2px 0;">
+              ${d.agent} → <span style="color:var(--ink2);">${d.code}</span>${d.name ? ' · ' + d.name : ''}${unknownTag}${ownerTag}
+            </div>`;
+          }).join('')}
+        </div>` : '';
+
+    return `
+    <div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ${accentCol};border-radius:12px;margin-bottom:10px;overflow:hidden;" id="${cardId}">
       <div onclick="toggleCampCard('${cardId}')" style="padding:12px 14px;cursor:pointer;user-select:none;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-          <div style="flex:1;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px;">
+          <div style="flex:1;min-width:0;">
             <div style="font-family:var(--mono);font-size:8px;color:${accentCol};text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px;">
               ${(camp.type||'').replace(/_/g,' ')}${camp.customer_categories?.length?' · '+camp.customer_categories.join(', '):''}${camp.condition&&camp.condition!=='no_condition'?' · '+(CONDITION_LABEL[camp.condition]||camp.condition):''}
             </div>
-            <div style="font-family:var(--display);font-size:18px;letter-spacing:.05em;">${camp.name}</div>
-            <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:2px;">
-              ${activePool} active pool${removed>0?` · <span style="color:var(--purple);">${removed} removed</span>`:''} &nbsp;·&nbsp; ⏰ ${camp.deadline||'no deadline'}
+            <div style="font-family:var(--display);font-size:17px;letter-spacing:.04em;">${camp.name || camp.id || ''}</div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:3px;">
+              ${delivered} of ${effPool} delivered · <span style="color:${totalYet>0?'var(--accent)':'var(--green)'};">${totalYet} yet to deliver</span> &nbsp;·&nbsp; ${deadlineMeta(camp.deadline)}${breakdown}
             </div>
           </div>
-          <div style="display:flex;align-items:flex-start;gap:10px;flex-shrink:0;margin-left:10px;">
+          <div style="display:flex;align-items:flex-start;gap:10px;flex-shrink:0;">
             <div style="text-align:right;">
-              <div style="font-family:var(--display);font-size:26px;color:${pctCol};">${pct}%</div>
-              <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">${delivered}/${activePool} delivered</div>
+              <div style="font-family:var(--display);font-size:24px;color:${pctCol};">${pct}%</div>
             </div>
-            <div id="${cardId}-arrow" style="font-family:var(--mono);font-size:14px;color:var(--ink3);margin-top:4px;">▸</div>
+            <div id="${cardId}-arrow" style="font-family:var(--mono);font-size:12px;color:var(--ink3);margin-top:6px;">▸</div>
           </div>
         </div>
         <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
@@ -2312,58 +2536,29 @@ function renderCampaignsMgmt() {
         </div>
       </div>
 
-      <!-- ── Collapsible body — hidden by default ── -->
-      <div id="${cardId}-body" style="display:none;border-top:1px solid var(--border);">
-
-        <!-- Status chips + FOC banner -->
-        <div style="padding:10px 14px ${focCost>0?'0':'10px'};">
-          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:${focCost>0?'10px':'0'};">
-            ${delivered >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(42,122,75,.12);color:var(--green);padding:2px 8px;border-radius:10px;">✓ ${delivered} delivered</span>`:''}
-            ${pending   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.05);color:var(--ink3);padding:2px 8px;border-radius:10px;">⏳ ${pending} pending</span>`:''}
-            ${nextVisit >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 8px;border-radius:10px;">📅 ${nextVisit} next visit</span>`:''}
-            ${notIn     >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(0,0,0,.05);color:var(--ink3);padding:2px 8px;border-radius:10px;">📵 ${notIn} not in</span>`:''}
-            ${refused   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 8px;border-radius:10px;">✗ ${refused} refused</span>`:''}
-            ${removed   >0?`<span style="font-family:var(--mono);font-size:8px;background:rgba(107,63,160,.1);color:var(--purple);padding:2px 8px;border-radius:10px;">— ${removed} removed</span>`:''}
-          </div>
-          ${focCost>0?`
-          <div style="background:rgba(200,134,10,.06);border:1px solid rgba(200,134,10,${focWarn?'.4':'.15'});border-radius:8px;padding:9px 11px;margin-bottom:10px;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:${focCap>0?'6px':'0'};">
-              <div>
-                <div style="font-family:var(--mono);font-size:8px;color:var(--gold);text-transform:uppercase;letter-spacing:.08em;">FOC Cost Running Total</div>
-                <div style="font-family:var(--display);font-size:20px;color:${focWarn?'var(--accent)':'var(--gold)'};">RM ${focActual.toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);margin-top:1px;">${delivered} × RM ${focCost.toFixed(2)}</div>
-              </div>
-              ${focCap>0?`<div style="text-align:right;">
-                <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">Cap: RM ${focCap.toLocaleString('en-MY',{minimumFractionDigits:0})}</div>
-                <div style="font-family:var(--display);font-size:16px;color:${focWarn?'var(--accent)':'var(--ink3)'};">${focPct}%</div>
-              </div>`:''}
-            </div>
-            ${focCap>0?`<div style="height:4px;background:rgba(200,134,10,.15);border-radius:2px;overflow:hidden;">
-              <div style="height:100%;width:${focPct}%;background:${focWarn?'var(--accent)':'var(--gold)'};border-radius:2px;"></div>
-            </div>`:''}
-          </div>`:''}
-        </div>
-
-        <!-- Per-agent rows -->
-        <div style="border-top:1px solid var(--border);">
-          <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;padding:7px 14px 4px;border-bottom:1px solid var(--border);">Per-agent delivery</div>
-          ${agentRows||`<div style="padding:12px 14px;font-family:var(--mono);font-size:10px;color:var(--ink3);">No agent assignments found — add an Agent column to your debtor upload list.</div>`}
-        </div>
-
-        <!-- Footer -->
-        <div style="padding:9px 14px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
-          <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);">
-            ${poolSize} pool ${isBdayCamp?'(from dashboard data)':poolFromDebtors?'(from debtor list)':'(from claims)'} · ${uniqueDebCodes.length} claimed · ${Object.keys(claims).length} raw records
-          </div>
+      <div id="${cardId}-body" style="display:none;background:#fbf9f4;">
+        ${agentRows || '<div style="padding:14px;font-family:var(--mono);font-size:10px;color:var(--ink3);text-align:center;">No agents have debtors in this campaign pool.</div>'}
+        ${offListSection}
+        <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
           <a href="campaign_audit.html" target="_blank"
              style="font-family:var(--mono);font-size:9px;color:var(--purple);text-decoration:none;padding:4px 10px;border:1px solid rgba(107,63,160,.3);border-radius:6px;background:rgba(107,63,160,.05);">
-            🔍 Open Audit →
+            🔍 Open full audit →
           </a>
         </div>
-
       </div>
     </div>`;
   }).join('');
+}
+
+function toggleAllCampCards(open) {
+  document.querySelectorAll('[id^="camp-card-"]').forEach(card => {
+    const cardId = card.id;
+    const body   = document.getElementById(cardId + '-body');
+    const arrow  = document.getElementById(cardId + '-arrow');
+    if (!body) return;
+    body.style.display = open ? 'block' : 'none';
+    if (arrow) arrow.textContent = open ? '▾' : '▸';
+  });
 }
 
 function toggleCampCard(cardId) {
@@ -2470,20 +2665,50 @@ function renderCommHeatmap(){
   const DATA = CURRENT_DATA || window.__DATA__;
   const agents=Object.keys(DATA.agents||{});
   const brands=Object.keys(DATA.config?.brand_config||BC);
-  const aw='65px',bw=`${Math.floor(80/brands.length)}%`;
-  let html=`<div class="heat-table"><div class="heat-grid" style="grid-template-columns:${aw} ${brands.map(()=>bw).join(' ')}">`;
+  const aw='65px',bw=`${Math.floor(75/brands.length)}%`;
+  const tw='38px';
+  let html=`<div class="heat-table"><div class="heat-grid" style="grid-template-columns:${aw} ${brands.map(()=>bw).join(' ')} ${tw}">`;
   html+=`<div class="h-hdr" style="text-align:left;padding-left:8px;">Agent</div>`;
   brands.forEach(b=>html+=`<div class="h-hdr">${b.replace('LAM+LWM','L+L')}</div>`);
+  html+=`<div class="h-hdr" style="color:var(--ink3);">✓+½</div>`;
+
+  // Brand totals accumulators
+  const brandHit={}, brandOne={};
+  brands.forEach(b=>{ brandHit[b]=0; brandOne[b]=0; });
+
   agents.forEach(agent=>{
     const bcomm=DATA.agents[agent]?.brand_commission||{};
     html+=`<div class="h-agent" onclick="openDrill('${agent}')">${agent}</div>`;
+    let agentScore=0;
     brands.forEach(b=>{
       const st=bcomm[b]?.status||'none_hit';
       const cls=st==='both_hit'?'hc-g':st==='one_hit'?'hc-o':'hc-r';
       const icon=st==='both_hit'?'✓':st==='one_hit'?'½':'✗';
+      if(st==='both_hit'){ brandHit[b]++; agentScore++; }
+      else if(st==='one_hit'){ brandOne[b]++; agentScore++; }
       html+=`<div class="h-cell ${cls}">${icon}</div>`;
     });
+    // Agent total column
+    const agCls=agentScore===brands.length?'hc-g':agentScore>0?'hc-o':'hc-r';
+    html+=`<div class="h-cell ${agCls}" style="font-weight:700;">${agentScore}</div>`;
   });
+
+  // Brand totals row
+  html+=`<div class="h-agent" style="font-size:9px;color:var(--ink3);">Total</div>`;
+  brands.forEach(b=>{
+    const tot=brandHit[b]+brandOne[b];
+    const cls=tot===agents.length?'hc-g':tot>0?'hc-o':'hc-r';
+    html+=`<div class="h-cell ${cls}" style="font-weight:700;">${tot}</div>`;
+  });
+  // Grand total cell
+  const grandTotal=agents.reduce((s,ag)=>{
+    const bcomm=DATA.agents[ag]?.brand_commission||{};
+    return s+brands.filter(b=>['both_hit','one_hit'].includes(bcomm[b]?.status)).length;
+  },0);
+  const maxTotal=agents.length*brands.length;
+  const gtCls=grandTotal===maxTotal?'hc-g':grandTotal>0?'hc-o':'hc-r';
+  html+=`<div class="h-cell ${gtCls}" style="font-weight:700;">${grandTotal}</div>`;
+
   html+=`</div></div>`;
   document.getElementById('comm-heatmap').innerHTML=html;}
 
@@ -2517,6 +2742,9 @@ function renderBrandSkuStatus() {
     </thead>
     <tbody>`;
 
+  const totals = {};
+  BRANDS.forEach(brand => { totals[brand] = { nonBuyers:0, target:0, actual:0 }; });
+
   agents.forEach((agent, ri) => {
     const bc  = D.agents[agent]?.brand_commission || {};
     const bg  = ri % 2 === 0 ? 'transparent' : 'rgba(255,255,255,.02)';
@@ -2531,6 +2759,9 @@ function renderBrandSkuStatus() {
         const pctVal     = target !== '—' && target > 0 ? Math.min(actual/target*100,100) : 0;
         const col        = hit ? '#2a7a4b' : pctVal >= 60 ? '#c8860a' : '#c8381a';
         const isAuto     = AUTO_B.has(brand);
+        totals[brand].nonBuyers += Number(nonBuyers) || 0;
+        totals[brand].target    += Number(target) || 0;
+        totals[brand].actual    += Number(actual) || 0;
 
         return `<td style="padding:6px 8px;text-align:center;border-left:1px solid rgba(255,255,255,.06);color:#c8381a;">${nonBuyers}</td>
           <td style="padding:6px 8px;text-align:center;${isAuto?'color:var(--blue)':'color:var(--ink3);'};">${target}</td>
@@ -2540,6 +2771,18 @@ function renderBrandSkuStatus() {
       }).join('')}
     </tr>`;
   });
+
+  html += `<tr style="background:var(--color-background-secondary,var(--bg));border-top:2px solid var(--color-border-secondary,var(--border));font-weight:500;">
+    <td style="padding:8px 12px;font-weight:700;white-space:nowrap;">合计</td>
+    ${BRANDS.map(brand => {
+      const t = totals[brand];
+      const hit = t.target > 0 && t.actual >= t.target;
+      const isAuto = AUTO_B.has(brand);
+      return `<td style="padding:6px 8px;text-align:center;border-left:1px solid rgba(255,255,255,.06);color:#c8381a;">${t.nonBuyers}</td>
+        <td style="padding:6px 8px;text-align:center;${isAuto?'color:var(--blue)':'color:var(--ink3);'};">${t.target}</td>
+        <td style="padding:6px 8px;text-align:center;font-weight:500;color:${hit ? '#2a7a4b' : 'var(--ink)'};">${t.actual}${hit?'✓':''}</td>`;
+    }).join('')}
+  </tr>`;
 
   html += `</tbody></table>`;
   el.innerHTML = html;
@@ -2644,6 +2887,7 @@ function renderBrandVolumeAlert() {
 // ── Dropping Debtors ───────────────────────────────────────────────────────
 let _dropFilter    = 'all';
 let _dropSkuFilter = 'all';
+let _dropAgentFilter = new Set(); // empty = all agents selected
 
 function setDropFilter(f, btn) {
   _dropFilter = f;
@@ -2671,12 +2915,108 @@ function setDropSkuFilter(f, btn) {
   renderDroppingDebtors();
 }
 
+function getDropAgents() {
+  const D = CURRENT_DATA || DATA;
+  return Object.keys(D?.agents || {}).sort();
+}
+
+function toggleDropAgentMenu() {
+  const p = document.getElementById('drop-agent-panel');
+  if (!p) return;
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  if (p.style.display === 'block') renderDropAgentList();
+}
+
+function renderDropAgentList() {
+  const list = document.getElementById('drop-agent-list');
+  if (!list) return;
+  const agents = getDropAgents();
+  list.innerHTML = agents.map(a => `
+    <div onclick="dropAgentToggle('${a}')" style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:12px;">
+      <div style="width:13px;height:13px;border:1px solid var(--border);border-radius:3px;background:${_dropAgentFilter.size===0||_dropAgentFilter.has(a)?'var(--accent)':'var(--card)'};display:flex;align-items:center;justify-content:center;">
+        ${_dropAgentFilter.size===0||_dropAgentFilter.has(a)?'<span style="font-size:9px;color:#fff;">✓</span>':''}
+      </div>
+      ${a}
+    </div>`).join('');
+}
+
+function renderDropAgentPills() {
+  const label = document.getElementById('drop-agent-label');
+  const pills = document.getElementById('drop-agent-pills');
+  if (!label || !pills) return;
+  if (_dropAgentFilter.size === 0) {
+    label.textContent = 'All agents';
+    pills.innerHTML = '';
+  } else {
+    label.textContent = `${_dropAgentFilter.size} selected`;
+    pills.innerHTML = [..._dropAgentFilter].map(a => `
+      <span onclick="dropAgentToggle('${a}')" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(200,56,26,.1);border-radius:5px;font-size:11px;color:var(--accent);cursor:pointer;">
+        ${a} <span style="opacity:0.6;font-size:9px;">✕</span>
+      </span>`).join('');
+  }
+}
+
+function dropAgentToggle(a) {
+  if (_dropAgentFilter.has(a)) _dropAgentFilter.delete(a);
+  else _dropAgentFilter.add(a);
+  renderDropAgentList();
+  renderDropAgentPills();
+  renderDroppingDebtors();
+}
+
+function dropAgentSelectAll() {
+  _dropAgentFilter.clear();
+  renderDropAgentList();
+  renderDropAgentPills();
+  renderDroppingDebtors();
+}
+
+function dropAgentClearAll() {
+  _dropAgentFilter.clear();
+  renderDropAgentList();
+  renderDropAgentPills();
+  renderDroppingDebtors();
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#drop-agent-dropdown-wrap')) {
+    const p = document.getElementById('drop-agent-panel');
+    if (p) p.style.display = 'none';
+  }
+});
+
+function getMgmtDebtorSkuDrops(d) {
+  const D = CURRENT_DATA || DATA;
+  const curMth  = D.current_month || '';
+  const mb      = d.month_breakdown || {};
+  const months  = Object.keys(mb).sort((a,b) => {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const [am,ay] = a.split(' '); const [bm,by] = b.split(' ');
+    return (parseInt(by)||0) - (parseInt(ay)||0) || months.indexOf(bm) - months.indexOf(am);
+  });
+  const prevMth = months.find(m => m !== curMth) || '';
+  const prevItems = (mb[prevMth] || []).map(r => r.item).filter(Boolean);
+  const curItems  = (mb[curMth]  || []).map(r => r.item).filter(Boolean);
+  if (prevItems.length === 0 && curItems.length === 0) return { stopped: [], reduced: [] };
+  const allSkus = [...new Set([...prevItems, ...curItems])];
+  const stopped = [], reduced = [];
+  allSkus.forEach(sku => {
+    const prev = (mb[prevMth]||[]).filter(r=>r.item===sku).reduce((s,r)=>s+(r.ctn||0),0);
+    const cur  = (mb[curMth] ||[]).filter(r=>r.item===sku).reduce((s,r)=>s+(r.ctn||0),0);
+    if (prev > 0 && cur < prev) {
+      cur === 0 ? stopped.push(sku) : reduced.push(sku);
+    }
+  });
+  return { stopped, reduced };
+}
+
 function renderDroppingDebtors() {
   const section = document.getElementById('dropping-debtors-section');
   const list    = document.getElementById('dropping-debtors-list');
   if (!section || !list) return;
   const D      = CURRENT_DATA || DATA;
   const agents = Object.keys(D.agents || {}).sort();
+  renderDropAgentPills();
 
   // Collect all debtors with a volume drop
   const drops = [];
@@ -2685,6 +3025,7 @@ function renderDroppingDebtors() {
     debtors.forEach(d => {
       // Exclude P-Personal accounts — not real shop debtors
       if ((d.debtor_type || '').toUpperCase() === 'P-PERSONAL') return;
+      if (_dropAgentFilter.size > 0 && !_dropAgentFilter.has(agent)) return;
 
       // Include if: stopped buying (ctn_cur=0, ctn_prev1>0) OR volume dropped ≥30%
       const stopped = (d.ctn_cur || 0) === 0 && (d.ctn_prev1 || 0) > 0;
@@ -2693,15 +3034,14 @@ function renderDroppingDebtors() {
       if (_dropFilter === 'stopped' && !stopped) return;
       if (_dropFilter === 'reduced' && !reduced) return;
 
-      // Find lapsed SKUs — bought in prev months but not this month
-      const lapsedSkus = Object.entries(d.sku_status || {})
-        .filter(([, v]) => v === 'lapsed')
-        .map(([k]) => k);
+      // Find item-level SKU drops from month_breakdown
+      const { stopped: skuStopped, reduced: skuReduced } = getMgmtDebtorSkuDrops(d);
+      const lapsedSkus = [...new Set([...skuStopped, ...skuReduced])];
 
       // Apply SKU brand filter — only show if selected brand is lapsed for this debtor
       if (_dropSkuFilter !== 'all' && !lapsedSkus.includes(_dropSkuFilter)) return;
 
-      drops.push({ agent, ...d, stopped, reduced, lapsedSkus });
+      drops.push({ agent, ...d, stopped, reduced, lapsedSkus, skuStopped, skuReduced });
     });
   });
 
@@ -2729,13 +3069,18 @@ function renderDroppingDebtors() {
       ? `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,56,26,.1);color:var(--accent);padding:2px 7px;border-radius:8px;white-space:nowrap;">Stopped</span>`
       : `<span style="font-family:var(--mono);font-size:8px;background:rgba(200,134,10,.1);color:var(--gold);padding:2px 7px;border-radius:8px;white-space:nowrap;">-${d.volume_drop_pct}%</span>`;
 
-    // SKU lapsed pills — highlight the filtered SKU if brand filter active
-    const skuPills = d.lapsedSkus.length
-      ? d.lapsedSkus.map(sku => {
-          const col      = SKU_COLS[sku] || 'var(--ink3)';
-          const isActive = _dropSkuFilter === sku;
-          return `<span style="font-family:var(--mono);font-size:8px;background:${isActive ? col : 'rgba(0,0,0,.06)'};color:${isActive ? '#fff' : col};border:1px solid ${col}33;padding:1px 6px;border-radius:6px;white-space:nowrap;font-weight:${isActive?'600':'400'};">${sku}</span>`;
-        }).join('')
+    const stoppedPills = d.skuStopped?.map(s =>
+      `<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(200,56,26,.15);color:var(--accent);border:0.5px solid rgba(200,56,26,.3);font-family:var(--mono);white-space:nowrap;">${s}</span>`
+    ).join('') || '';
+    const reducedPills = d.skuReduced?.map(s =>
+      `<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(200,134,10,.15);color:var(--gold);border:0.5px solid rgba(200,134,10,.3);font-family:var(--mono);white-space:nowrap;">${s}</span>`
+    ).join('') || '';
+    const stoppedHtml = d.skuStopped?.length
+      ? `<span style="font-size:9px;color:var(--accent);margin-right:3px;">停购:</span>${stoppedPills}` : '';
+    const reducedHtml = d.skuReduced?.length
+      ? `<span style="font-size:9px;color:var(--gold);margin-left:${d.skuStopped?.length?'6px':'0'};margin-right:3px;">减少:</span>${reducedPills}` : '';
+    const skuPills = (d.skuStopped?.length || d.skuReduced?.length)
+      ? stoppedHtml + reducedHtml
       : `<span style="font-family:var(--mono);font-size:8px;color:var(--ink3);">—</span>`;
 
     return `
@@ -2758,7 +3103,7 @@ function renderDroppingDebtors() {
       </div>
       <!-- SKU lapsed row -->
       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:64px;">
-        <span style="font-family:var(--mono);font-size:8px;color:var(--ink3);white-space:nowrap;">Lapsed SKU:</span>
+        <span style="font-family:var(--mono);font-size:8px;color:var(--ink3);white-space:nowrap;">条数下降:</span>
         ${skuPills}
       </div>
     </div>`;
@@ -3480,40 +3825,6 @@ function renderYearlyYTD() {
   }).join('');
 }
 
-async function refreshBdayAudit() {
-  const btn = document.getElementById('bday-refresh-btn');
-  if (btn) { btn.textContent = '↻ Loading...'; btn.disabled = true; }
-  try {
-    if (GistSync.isConfigured()) {
-      const curMonth = DATA?.current_month || '';
-      const slug     = curMonth.replace(' ','');
-      // Pull kpi_scores — structure: { "Apr 26": { "CJ": { birthday_campaign: 3, event: 5 } } }
-      const kpiFile = await GistSync.pull('kpi_scores');
-      if (kpiFile) {
-        // Try exact month key first, then try slug
-        const monthScores = kpiFile[curMonth] || kpiFile[slug] || null;
-        if (monthScores) {
-          try { localStorage.setItem('md_scores_' + slug, JSON.stringify(monthScores)); } catch(e) {}
-        }
-      }
-      // Also re-pull claims
-      const claims = await GistSync.pull('claims_' + slug);
-      if (claims) {
-        Object.entries(claims).forEach(([k, v]) => {
-          try { localStorage.setItem('camp_claim_' + slug + '_' + k, JSON.stringify(v)); } catch(e) {}
-        });
-      }
-    }
-    renderBdayAudit();
-    showMgmtToast('Birthday data refreshed', '#1a5c8f');
-  } catch(e) {
-    console.warn('[refreshBdayAudit]', e);
-    showMgmtToast('Refresh failed: ' + e.message, '#c8381a');
-  }
-  finally {
-    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
-  }
-}
 
 function saveGistToken() {
   const t = (document.getElementById('gist-token-input') || {}).value || '';
