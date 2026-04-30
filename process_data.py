@@ -1068,7 +1068,7 @@ def build_debtor_info(debtor_df):
     """Build debtor lookup dict from Debtor Maintenance DataFrame.
     Extracted from calc_debtor_cards() so it can be shared with calc_brand_commission
     and calc_newbie_scheme.
-    Returns: {debtor_code: {name, phone, vip, birth_date, open_date, type, agent, dm_active}}
+    Returns: {debtor_code: {name, phone, vip, birth_date, open_date, type, agent, dm_active, has_bonus_point}}
     """
     debtor_info = {}
     if debtor_df.empty:
@@ -1086,6 +1086,7 @@ def build_debtor_info(debtor_df):
     BIRTH_COL  = next((c for c in cols if 'Birth' in c), None)
     AGENT_COL  = next((c for c in cols if c.strip() == 'Agent'), None)
     ACTIVE_COL = next((c for c in cols if c.strip() == 'Active'), None)
+    BONUS_POINT_COL = next((c for c in cols if c.strip() == 'Has Bonus Point'), None)
 
     for _, row in debtor_df.iterrows():
         code = str(row.get(CODE_COL, '') if CODE_COL else '').strip()
@@ -1106,6 +1107,11 @@ def build_debtor_info(debtor_df):
             av = str(row.get(ACTIVE_COL, '')).strip().lower()
             dm_active = av not in ('unchecked','false','0','n','no','inactive','nan','none','')
 
+        has_bonus_point = False
+        if BONUS_POINT_COL:
+            bp = str(row.get(BONUS_POINT_COL, '')).strip().lower()
+            has_bonus_point = bp not in ('unchecked','false','0','n','no','nan','none','')
+
         debtor_info[code] = {
             "name":       str(row.get(NAME_COL, code) if NAME_COL else code).strip(),
             "phone":      phone_raw,
@@ -1115,6 +1121,7 @@ def build_debtor_info(debtor_df):
             "type":       type_raw,
             "agent":      agent_raw,
             "dm_active":  dm_active,
+            "has_bonus_point": has_bonus_point,
         }
 
     return debtor_info
@@ -1405,6 +1412,7 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
                 "phone":              info.get("phone", ""),
                 "debtor_type":        info.get("type", ""),
                 "vip":                info.get("vip", False),
+                "has_bonus_point":    info.get("has_bonus_point", False),
                 "is_new":             is_new,
                 "birthday_this_month": birthday_this_month,
                 "birth_date_raw":     str(_parse_birth_date(birth_date)) if birth_date and pd.notnull(birth_date) and _parse_birth_date(birth_date) is not None else None,
@@ -2761,6 +2769,8 @@ def main():
     # Build shared debtor_info (used by multiple modules)
     debtor_info_shared = build_debtor_info(debtor_df)
     log(f"  Shared debtor_info built: {len(debtor_info_shared)} debtors")
+    bp_checked = sum(1 for v in debtor_info_shared.values() if v.get("has_bonus_point"))
+    log(f"  Has Bonus Point = Checked: {bp_checked} debtors")
 
     # ── Run modules ─────────────────────────────────────────────────
     sales_prog  = calc_sales_progression(df, targets, all_agents, cur_month)
