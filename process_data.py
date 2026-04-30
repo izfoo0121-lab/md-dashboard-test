@@ -75,6 +75,28 @@ def _supabase_post(path, rows, prefer="return=representation"):
         body = resp.read().decode("utf-8")
         return json.loads(body) if body else None
 
+def fetch_kpi_manual_overrides(cur_month):
+    """Fetch kpi_manual rows once for KPI scoring, dashboard tiles, and newbie scheme."""
+    try:
+        month_q = urllib.parse.quote(str(cur_month), safe="")
+        rows = _supabase_get(f"kpi_manual?select=*&month=eq.{month_q}")
+        overrides = {}
+        for r in rows or []:
+            agent = (r.get("agent") or "").upper()
+            if not agent:
+                continue
+            overrides[agent] = {
+                "new_accounts": r.get("new_accounts", 0) or 0,
+                "vip_count":    r.get("vip_count", 0) or 0,
+                "event":        r.get("event_count", 0) or 0,
+                "campaign_1":   r.get("campaign_pct", 0) or 0,
+            }
+        log(f"   [Supabase KPI] Loaded manual rows for {len(overrides)} agents")
+        return overrides
+    except Exception as e:
+        log(f"   [Supabase KPI] Skipped: {e}")
+        return {}
+
 def _load_public_holidays():
     """Fetch public holidays from Supabase targets_static. Empty set on error."""
     try:
@@ -831,7 +853,7 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
 
 # ── Module 3: Newbie Scheme ───────────────────────────────────────────────────
 
-def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None):
+def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None, manual_overrides=None):
     """
     For agents flagged as newbie:
       - CTN tiers: per-agent thresholds and rewards (from agent.newbie_tiers)
@@ -839,7 +861,7 @@ def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None):
 
     new_accounts = debtors where open_date falls in cur_month (from Debtor Maintenance),
                    filtered to this agent, excluding Personal/empty-type, Active=Checked only.
-    Frontend may override with kpi_manual value if supervisor entered one.
+    Admin kpi_manual.new_accounts may override the auto count as an absolute value.
     """
     log("Calculating Newbie Scheme...")
     if debtor_info is None:
@@ -926,6 +948,13 @@ def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None):
 
         # Account bonus tier — per-agent override with global fallback
         # If agent has "newbie_account_tiers" set, use that; else use global account_tiers
+        new_acc_count_auto = new_acc_count
+        override = (manual_overrides or {}).get(agent.upper(), {}).get("new_accounts")
+        override_active = override is not None and override > 0
+        if override_active:
+            new_acc_count = int(override)
+            log(f"  Newbie scheme {agent}: new_accounts auto={new_acc_count_auto} -> override={new_acc_count}")
+
         agent_acc_tiers = ag_info.get("newbie_account_tiers")
         use_tiers = agent_acc_tiers if agent_acc_tiers else account_tiers
 
@@ -943,6 +972,8 @@ def calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=None):
             "ctn_tier_hit":    ctn_tier_hit,
             "ctn_reward":      ctn_reward,
             "new_accounts":    new_acc_count,
+            "new_accounts_auto": new_acc_count_auto,
+            "new_accounts_override_active": override_active,
             "new_account_codes": new_acc_codes,  # NEW: list of which debtor codes counted
             "account_tiers":   use_tiers,       # per-agent or global (effective)
             "account_tiers_custom": bool(agent_acc_tiers),  # flag: is override active?
@@ -2912,6 +2943,7 @@ def main():
     _today = date.today()
     agents_list = sorted({info.get("agent", "") for info in debtor_info_shared.values() if info.get("agent")})
     _maybe_take_patronage_snapshot(_today, debtor_info_shared, agents_list)
+    _sb_kpi = fetch_kpi_manual_overrides(cur_month)
 
     # ── Run modules ─────────────────────────────────────────────────
     sales_prog  = calc_sales_progression(df, targets, all_agents, cur_month)
@@ -2919,7 +2951,7 @@ def main():
 
     # ── Auto-calculate penetration targets from non-buyer counts ─────────────
     targets = save_penetration_snapshot(brand_comm, targets, cur_month)
-    newbie      = calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=debtor_info_shared)
+    newbie      = calc_newbie_scheme(df, targets, agents, cur_month, debtor_info=debtor_info_shared, manual_overrides=_sb_kpi)
     aging       = calc_aging(df, all_agents, cur_month)
     debtor_cards = calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map, area_groups)
 
@@ -2991,60 +3023,41 @@ def main():
             "inherit_from_month": ag_cfg.get("inherit_from_month", None),
         }
 
-    # ── Supabase KPI manual scores fetch (from kpi_manual table) ────
-    try:
-        import requests as _req
-        _SB_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co'
-        _SB_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw'
-        _resp = _req.get(
-            f"{_SB_URL}/rest/v1/kpi_manual",
-            params={"select": "*", "month": f"eq.{cur_month}"},
-            headers={"apikey": _SB_KEY, "Authorization": f"Bearer {_SB_KEY}"},
-            timeout=10
-        )
-        if _resp.ok:
-            # Build lookup: agent -> {new_accounts: N, vip_count: N, ...}
-            _sb_kpi = {}
-            for r in _resp.json():
-                _ag = (r.get('agent') or '').upper()
-                if _ag:
-                    _sb_kpi[_ag] = {
-                        'new_accounts': r.get('new_accounts', 0) or 0,
-                        'vip_count':    r.get('vip_count', 0) or 0,
-                        'event':        r.get('event_count', 0) or 0,
-                        'campaign_1':   r.get('campaign_pct', 0) or 0,
-                    }
-            _applied = 0
-            for _agent, _adata in output.get('agents', {}).items():
-                _items = _adata.get('kpi', {}).get('items', {})
-                _scores = _sb_kpi.get(_agent, {})
-                if not _scores:
-                    continue
-                for _key, _item in _items.items():
-                    if not _item.get('needs_supabase_fetch'):
-                        continue
-                    if _key in _scores:
-                        _item['actual'] = _scores[_key]
-                        _tgt = _item.get('target') or 1
-                        _max = _item.get('max_score') or 0
-                        _item['score'] = round(min(_item['actual'] / _tgt, 1) * _max, 2)
-                        _item['pct'] = round((_item['actual'] / _tgt) * 100) if _tgt else 0
-                # Recompute KPI totals for this agent
-                _kpi = _adata.get('kpi', {})
-                _all_items = _kpi.get('items', {})
-                if _all_items:
-                    _kpi['grand_total'] = round(sum(i.get('score', 0) for i in _all_items.values()), 2)
-                    _kpi['total_abc'] = round(sum(i.get('score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C')), 2)
-                    _max_total = sum(i.get('max_score', 0) for i in _all_items.values())
-                    _max_abc = sum(i.get('max_score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C'))
-                    _kpi['grand_pct'] = round(_kpi['grand_total'] / _max_total * 100, 1) if _max_total else 0
-                    _kpi['total_pct'] = round(_kpi['total_abc'] / _max_abc * 100, 1) if _max_abc else 0
-                _applied += 1
-            log(f"   [Supabase KPI] Applied manual scores for {_applied} agents")
-        else:
-            log(f"   [Supabase KPI] Fetch failed: {_resp.status_code}")
-    except Exception as _e:
-        log(f"   [Supabase KPI] Skipped: {_e}")
+    # ── Supabase KPI manual scores apply (from kpi_manual table) ────
+    # Surface and apply Supabase KPI manual scores loaded before module calculations.
+    _applied = 0
+    for _agent, _adata in output.get('agents', {}).items():
+        _items = _adata.get('kpi', {}).get('items', {})
+        _scores = _sb_kpi.get(_agent, {})
+        if not _scores:
+            continue
+        _adata['kpi_manual_overrides'] = {
+            'new_accounts': _scores.get('new_accounts', 0),
+            'vip_count':    _scores.get('vip_count', 0),
+            'event':        _scores.get('event', 0),
+            'campaign_1':   _scores.get('campaign_1', 0),
+            'has_override': True,
+        }
+        for _key, _item in _items.items():
+            if not _item.get('needs_supabase_fetch'):
+                continue
+            if _key in _scores:
+                _item['actual'] = _scores[_key]
+                _tgt = _item.get('target') or 1
+                _max = _item.get('max_score') or 0
+                _item['score'] = round(min(_item['actual'] / _tgt, 1) * _max, 2)
+                _item['pct'] = round((_item['actual'] / _tgt) * 100) if _tgt else 0
+        _kpi = _adata.get('kpi', {})
+        _all_items = _kpi.get('items', {})
+        if _all_items:
+            _kpi['grand_total'] = round(sum(i.get('score', 0) for i in _all_items.values()), 2)
+            _kpi['total_abc'] = round(sum(i.get('score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C')), 2)
+            _max_total = sum(i.get('max_score', 0) for i in _all_items.values())
+            _max_abc = sum(i.get('max_score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C'))
+            _kpi['grand_pct'] = round(_kpi['grand_total'] / _max_total * 100, 1) if _max_total else 0
+            _kpi['total_pct'] = round(_kpi['total_abc'] / _max_abc * 100, 1) if _max_abc else 0
+        _applied += 1
+    log(f"   [Supabase KPI] Applied manual scores for {_applied} agents")
     # ────────────────────────────────────────────────────────────────
 
     # ── Write JSON ──────────────────────────────────────────────────
