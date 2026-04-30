@@ -58,6 +58,113 @@ def _supabase_get(path):
             return out
         start += page_size
 
+def _supabase_post(path, rows, prefer="return=representation"):
+    """POST/upsert to Supabase REST API. Requires SUPABASE_SERVICE_KEY for writes."""
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not key:
+        raise RuntimeError("SUPABASE_SERVICE_KEY missing")
+    url = f"{(os.environ.get('SUPABASE_URL') or SUPABASE_URL).rstrip('/')}/rest/v1/{path}"
+    data = json.dumps(rows).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers={
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": prefer,
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = resp.read().decode("utf-8")
+        return json.loads(body) if body else None
+
+def _load_public_holidays():
+    """Fetch public holidays from Supabase targets_static. Empty set on error."""
+    try:
+        rows = _supabase_get("targets_static?select=value&key=eq.public_holidays")
+        if not rows or not rows[0].get("value"):
+            return set()
+        raw = rows[0]["value"]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        from dateutil.parser import parse as dparse
+        out = set()
+        for item in raw:
+            d = item.get("date", "") if isinstance(item, dict) else str(item)
+            try:
+                out.add(dparse(d).date())
+            except Exception:
+                continue
+        return out
+    except Exception as e:
+        log(f"WARNING: Could not load public_holidays from Supabase: {e}")
+        return set()
+
+def _is_first_business_day(today, holidays):
+    """Return True if today is the first business day of its month. Mon-Sat count."""
+    d = date(today.year, today.month, 1)
+    while True:
+        if d.weekday() != 6 and d not in holidays:
+            return d == today
+        d = d + timedelta(days=1)
+
+def _maybe_take_patronage_snapshot(today, debtor_info, agents_list):
+    """Take monthly patronage opening snapshot on the first business day only."""
+    holidays = _load_public_holidays()
+    if not _is_first_business_day(today, holidays):
+        return False
+
+    if not os.environ.get("SUPABASE_SERVICE_KEY"):
+        log("WARNING: SUPABASE_SERVICE_KEY missing; skipping patronage snapshot")
+        return False
+
+    cur_month = today.strftime("%Y-%m")
+    try:
+        existing = _supabase_get(f"patronage_history?select=month&month=eq.{cur_month}&limit=1")
+        if existing:
+            log(f"  Patronage snapshot for {cur_month} already exists - skipping")
+            return False
+    except Exception as e:
+        log(f"WARNING: Could not check existing patronage snapshot: {e}")
+        return False
+
+    counts = {}
+    agents_set = {a for a in agents_list if a}
+    for _, info in debtor_info.items():
+        if not info.get("dm_active", True):
+            continue
+        dtype = (info.get("type", "") or "").strip()
+        if not dtype or dtype in {"P-Personal", "P-PERSONAL", "personal", "Personal", "PERSONAL"}:
+            continue
+        agent = (info.get("agent", "") or "").strip()
+        if not agent or (agents_set and agent not in agents_set):
+            continue
+        counts[agent] = counts.get(agent, 0) + 1
+
+    if not counts:
+        log(f"WARNING: No agents found for {cur_month} patronage snapshot - aborting")
+        return False
+
+    rows = [{
+        "month": cur_month,
+        "agent": agent,
+        "opening_total": total,
+        "snapshot_date": today.isoformat(),
+        "notes": f"AUTO-SNAPSHOT: taken {today.isoformat()} (first business day of {cur_month})",
+    } for agent, total in sorted(counts.items())]
+
+    try:
+        _supabase_post(
+            "patronage_history?on_conflict=month,agent",
+            rows,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        log(f"  Patronage snapshot taken for {cur_month}: {len(rows)} agents, total {sum(counts.values())} debtors")
+        return True
+    except Exception as e:
+        log(f"WARNING: Failed to write patronage snapshot: {e}")
+        return False
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 BASE_DIR        = Path(__file__).parent
@@ -1157,6 +1264,25 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
         d = (d - timedelta(days=1)).replace(day=1)
     cur_m, prev1_m, prev2_m, prev3_m = months[0], months[1], months[2], months[3]
 
+    # Fetch frozen patronage baselines for current month (used as activation_base).
+    patronage_baselines = {}
+    patronage_snapshot_date = None
+    try:
+        from dateutil.parser import parse as dparse
+        patronage_month = dparse("01 " + cur_month).strftime("%Y-%m")
+        rows = _supabase_get(
+            f"patronage_history?select=agent,opening_total,snapshot_date&month=eq.{patronage_month}"
+        )
+        for r in rows or []:
+            patronage_baselines[r["agent"]] = int(r["opening_total"])
+            patronage_snapshot_date = r.get("snapshot_date")
+        if patronage_baselines:
+            log(f"  Patronage baselines loaded for {patronage_month}: {len(patronage_baselines)} agents, total {sum(patronage_baselines.values())}")
+        else:
+            log(f"  WARNING: No patronage baseline for {patronage_month} - using LIVE counts (fallback)")
+    except Exception as e:
+        log(f"WARNING: Could not fetch patronage baselines: {e}")
+
     # Canggih paid transactions
     canggih_paid = df[
         (df["item_group"] != EIGHTCOM_GROUP) &
@@ -1472,7 +1598,9 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
             and not d.get("is_new", False)
         )
 
-        np_total        = len(non_personal)
+        np_total_live   = len(non_personal)
+        np_total        = patronage_baselines.get(agent, np_total_live)
+        np_total_uses_baseline = agent in patronage_baselines
         np_active       = active_count
         activation_rate = round(np_active / np_total * 100, 1) if np_total > 0 else 0
         total_new_sku   = sum(d.get("new_sku_count", 0) for d in non_personal)
@@ -1488,6 +1616,9 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
             "inactive_count":     inactive_count,
             "activation_rate":    activation_rate,
             "activation_base":    np_total,
+            "activation_base_live": np_total_live,
+            "activation_base_frozen": np_total_uses_baseline,
+            "activation_snapshot_date": patronage_snapshot_date if np_total_uses_baseline else None,
             "activation_active":  np_active,
             "pending_activation": inactive_count,
             "total_new_sku":      total_new_sku,
@@ -2771,6 +2902,9 @@ def main():
     log(f"  Shared debtor_info built: {len(debtor_info_shared)} debtors")
     bp_checked = sum(1 for v in debtor_info_shared.values() if v.get("has_bonus_point"))
     log(f"  Has Bonus Point = Checked: {bp_checked} debtors")
+    _today = date.today()
+    agents_list = sorted({info.get("agent", "") for info in debtor_info_shared.values() if info.get("agent")})
+    _maybe_take_patronage_snapshot(_today, debtor_info_shared, agents_list)
 
     # ── Run modules ─────────────────────────────────────────────────
     sales_prog  = calc_sales_progression(df, targets, all_agents, cur_month)
