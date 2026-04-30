@@ -24,11 +24,39 @@ Column reference (MD Sales Report):
 import json
 import os
 import sys
+import urllib.parse
+import urllib.request
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import pandas as pd
 import openpyxl
+
+# ── Supabase config (read-only fetches for campaigns) ─────────────────────────
+SUPABASE_URL = "https://rqitgmydcbyiygqjssrb.supabase.co"
+SUPABASE_KEY = "sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw"  # publishable key, safe in source
+
+def _supabase_get(path):
+    """GET from Supabase REST API. Returns parsed JSON list. Raises on HTTP error."""
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    out = []
+    page_size = 1000
+    start = 0
+    while True:
+        req = urllib.request.Request(url, headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Accept": "application/json",
+            "Range": f"{start}-{start + page_size - 1}",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            batch = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(batch, list):
+            return batch
+        out.extend(batch)
+        if len(batch) < page_size:
+            return out
+        start += page_size
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -2488,80 +2516,164 @@ def main():
 
     log(f"Current month: {cur_month}  |  Lookback: {prev_months}")
 
-    # Load campaigns.json — build debtor→campaigns lookup + area_groups
+    # Load campaigns — build debtor→campaigns lookup + area_groups
     campaign_map = {}  # debtor_code → [campaign info with progress fields]
     area_groups  = {}  # area_code → group (MVP/MI/SS/SBG)
     camp_data_global = {}
+
+    # TODO: migrate area_groups to its own Supabase table or config file.
     if CAMPAIGNS_FILE.exists():
         try:
             with open(CAMPAIGNS_FILE, encoding="utf-8") as f:
                 camp_data_global = json.load(f)
             area_groups = camp_data_global.get("area_groups", {})
-            for camp in camp_data_global.get("campaigns", []):
-                if not camp.get("active", True): continue
-                # ── Month filter — only show campaigns active in cur_month ──
-                # start_date must be <= cur_month, deadline must be >= cur_month
-                # Fall back to created_at if start_date missing
-                camp_start    = camp.get("start_date") or camp.get("created_at", "")
-                camp_deadline = camp.get("deadline", "")
-                try:
-                    from dateutil.parser import parse as dparse
-                    cm_date = dparse("01 " + cur_month)
-                    cm_str  = cm_date.strftime("%Y-%m")
-                    if camp_start:
-                        sd_str = dparse(str(camp_start)).strftime("%Y-%m")
-                        if sd_str > cm_str: continue  # campaign not started yet
-                    if camp_deadline:
-                        dl_str = dparse(str(camp_deadline)).strftime("%Y-%m")
-                        if dl_str < cm_str: continue  # campaign already ended
-                except Exception:
-                    pass  # if date parsing fails, include campaign
-                cat_rules = camp.get("cat_rules", {})
-                for d in camp.get("debtors", []):
-                    code = d.get("code","") if isinstance(d, dict) else str(d)
-                    cat  = d.get("cat","") if isinstance(d, dict) else ""
-                    if not code: continue
-                    # Get CAT-specific rules — try full key first (e.g. "D2"), then first char (e.g. "D")
-                    cat_group = cat[0].upper() if cat else ""
-                    crule = cat_rules.get(cat) or cat_rules.get(cat_group) or {} if cat else {}
-                    if code not in campaign_map: campaign_map[code] = []
-                    campaign_map[code].append({
-                        "id":              camp.get("id",""),
-                        "name":            camp.get("name",""),
-                        "type":            camp.get("type","other"),
-                        "brand":           camp.get("brand",""),
-                        "cat":             cat,
-                        "start_date":      camp.get("start_date",""),
-                        "deadline":        camp.get("deadline",""),
-                        "approval_required": camp.get("approval_required", False),
-                        # CAT-level rules (fallback to campaign level)
-                        "promo_detail":    crule.get("promo_detail", camp.get("promo_detail","")),
-                        "redemption_type": crule.get("redemption_type", "free_goods"),
-                        "accumulation":    crule.get("accumulation", "per_transaction"),
-                        "redemption_limit":crule.get("redemption_limit", 0),
-                        "redemption_unit": crule.get("redemption_unit", "ctn"),
-                        "min_order_ctn":   crule.get("min_order_ctn", camp.get("min_order_ctn", 0)),
-                        "foc_per_ctn":     crule.get("foc_per_ctn", 0),
-                        "foc_per_threshold": crule.get("foc_per_threshold", 0),
-                        "foc_item":        crule.get("foc_item", ""),
-                        "foc_item_rule":   crule.get("foc_item_rule", {}),
-                        "foc_note":        crule.get("foc_note", ""),
-                        "voucher_amount":  crule.get("voucher_amount", 0),
-                        "voucher_tracking":crule.get("voucher_tracking", False),
-                        "eligible_sales_type": camp.get("eligible_sales_type", []),
-                        "eligible_types":  camp.get("eligible_types", []),
-                        "target_pct":      crule.get("target_pct", 0),
-                        "target_label":    crule.get("target_label", ""),
-                        # Progress fields — filled in calc_debtor_cards
-                        "ctn_this_month":  0,
-                        "foc_earned":      0,
-                        "qualified":       False,
-                        "group":           "",
-                        "foc_item_resolved": "",
-                    })
-            log(f"Campaigns: {len(camp_data_global.get('campaigns',[]))} loaded, {len(campaign_map)} debtors tagged")
+            if not area_groups:
+                log("WARNING: campaigns.json has no area_groups; defaulting to {}")
         except Exception as e:
-            log(f"⚠ Could not load campaigns.json: {e}")
+            area_groups = {}
+            log(f"WARNING: Could not load area_groups from campaigns.json: {e}")
+    else:
+        log("WARNING: campaigns.json missing; area_groups defaulting to {}")
+
+    def _campaign_active_in_month(camp):
+        # Month filter — only show campaigns active in cur_month.
+        # start_date must be <= cur_month, deadline must be >= cur_month.
+        # Fall back to created_at if start_date missing.
+        camp_start    = camp.get("start_date") or camp.get("created_at", "")
+        camp_deadline = camp.get("deadline", "")
+        try:
+            from dateutil.parser import parse as dparse
+            cm_date = dparse("01 " + cur_month)
+            cm_str  = cm_date.strftime("%Y-%m")
+            if camp_start:
+                sd_str = dparse(str(camp_start)).strftime("%Y-%m")
+                if sd_str > cm_str: return False
+            if camp_deadline:
+                dl_str = dparse(str(camp_deadline)).strftime("%Y-%m")
+                if dl_str < cm_str: return False
+        except Exception:
+            pass  # if date parsing fails, include campaign
+        return True
+
+    def _append_campaign_map_entry(camp, code, cat, cat_group, crule):
+        if not code: return
+        if code not in campaign_map: campaign_map[code] = []
+        # TODO: Supabase schema does not yet include redemption_type,
+        # accumulation, redemption_limit, redemption_unit, foc_per_ctn,
+        # foc_per_threshold, foc_item_rule, foc_note, voucher_amount,
+        # voucher_tracking, eligible_sales_type, eligible_types, or
+        # campaign-level approval_required; keep legacy-safe defaults.
+        campaign_map[code].append({
+            "id":              camp.get("id",""),
+            "name":            camp.get("name",""),
+            "type":            camp.get("type","other"),
+            "brand":           camp.get("brand",""),
+            "cat":             cat,
+            "start_date":      camp.get("start_date",""),
+            "deadline":        camp.get("deadline",""),
+            "approval_required": camp.get("approval_required", False),
+            # CAT-level rules (fallback to campaign level)
+            "promo_detail":    crule.get("promo_detail", camp.get("promo_detail","")),
+            "redemption_type": crule.get("redemption_type", "free_goods"),
+            "accumulation":    crule.get("accumulation", "per_transaction"),
+            "redemption_limit":crule.get("redemption_limit", 0),
+            "redemption_unit": crule.get("redemption_unit", "ctn"),
+            "min_order_ctn":   crule.get("min_order_ctn", camp.get("min_order_ctn", 0)),
+            "foc_per_ctn":     crule.get("foc_per_ctn", 0),
+            "foc_per_threshold": crule.get("foc_per_threshold", 0),
+            "foc_item":        crule.get("foc_item", ""),
+            "foc_item_rule":   crule.get("foc_item_rule", {}),
+            "foc_note":        crule.get("foc_note", ""),
+            "voucher_amount":  crule.get("voucher_amount", 0),
+            "voucher_tracking":crule.get("voucher_tracking", False),
+            "eligible_sales_type": camp.get("eligible_sales_type", []),
+            "eligible_types":  camp.get("eligible_types", []),
+            "target_pct":      crule.get("target_pct", 0),
+            "target_label":    crule.get("target_label", ""),
+            # Progress fields — filled in calc_debtor_cards
+            "ctn_this_month":  0,
+            "foc_earned":      0,
+            "qualified":       False,
+            "group":           "",
+            "foc_item_resolved": "",
+        })
+
+    def _load_campaigns_from_json():
+        loaded = 0
+        if not CAMPAIGNS_FILE.exists():
+            log("WARNING: campaigns.json missing; no campaign fallback available")
+            return loaded
+        with open(CAMPAIGNS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        for camp in data.get("campaigns", []):
+            if not camp.get("active", True): continue
+            if not _campaign_active_in_month(camp): continue
+            loaded += 1
+            cat_rules = camp.get("cat_rules", {})
+            for d in camp.get("debtors", []):
+                code = d.get("code","") if isinstance(d, dict) else str(d)
+                cat  = d.get("cat","") if isinstance(d, dict) else ""
+                if not code: continue
+                # Get CAT-specific rules — try full key first (e.g. "D2"), then first char (e.g. "D")
+                cat_group = cat[0].upper() if cat else ""
+                crule = cat_rules.get(cat) or cat_rules.get(cat_group) or {} if cat else {}
+                _append_campaign_map_entry(camp, code, cat, cat_group, crule)
+        return loaded
+
+    try:
+        campaign_rows = _supabase_get("campaigns?select=*&active=eq.true")
+        rule_rows     = _supabase_get("campaign_cat_rules?select=*")
+        debtor_rows   = _supabase_get("campaign_debtors?select=*")
+
+        rules_by_key = {
+            (r.get("campaign_id"), r.get("cat_group")): {
+                "promo_detail": r.get("promo_detail") or "",
+                "min_order_ctn": r.get("min_order_ctn") or 0,
+                "foc_item": r.get("foc_item") or "",
+                "target_pct": r.get("target_pct") or 0,
+                "target_label": r.get("target_label") or "",
+            }
+            for r in (rule_rows or [])
+        }
+        debtors_by_campaign = {}
+        for d in debtor_rows or []:
+            debtors_by_campaign.setdefault(d.get("campaign_id"), []).append(d)
+
+        active_count = 0
+        for camp_row in campaign_rows or []:
+            brands = camp_row.get("brands") or []
+            camp = {
+                "id": camp_row.get("id",""),
+                "name": camp_row.get("name",""),
+                "type": camp_row.get("type","other"),
+                "brand": brands[0] if isinstance(brands, list) and brands else "",
+                "start_date": camp_row.get("start_date",""),
+                "deadline": camp_row.get("deadline",""),
+                "created_at": camp_row.get("created_at",""),
+                "min_order_ctn": camp_row.get("min_order_ctn", 0) or 0,
+                "promo_detail": camp_row.get("promo_detail","") or "",
+                "approval_required": False,
+                "eligible_sales_type": [],
+                "eligible_types": [],
+            }
+            if not _campaign_active_in_month(camp): continue
+            active_count += 1
+            for d in debtors_by_campaign.get(camp["id"], []):
+                code = d.get("debtor_code","")
+                cat  = d.get("cat","") or ""
+                cat_group = d.get("cat_group") or (cat[0].upper() if cat else "")
+                crule = rules_by_key.get((camp["id"], cat_group)) or {}
+                _append_campaign_map_entry(camp, code, cat, cat_group, crule)
+
+        log(f"Campaigns (Supabase): {active_count} active, {len(campaign_map)} debtors tagged")
+    except Exception as e:
+        log(f"WARNING: Supabase campaign fetch failed: {e} -> falling back to campaigns.json")
+        campaign_map = {}
+        try:
+            loaded = _load_campaigns_from_json()
+            log(f"Campaigns (JSON fallback): {loaded} active, {len(campaign_map)} debtors tagged")
+        except Exception as json_e:
+            log(f"WARNING: Could not load campaigns.json fallback: {json_e}")
 
     # ── Scope filter ───────────────────────────────────────────────
     df = filter_scope(df_raw)
