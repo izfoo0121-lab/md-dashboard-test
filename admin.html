@@ -670,7 +670,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
           </div>
           <div style="display:flex;gap:10px;align-items:flex-start;">
             <span style="font-family:var(--display);font-size:18px;color:rgba(255,255,255,.5);flex-shrink:0;">3</span>
-            <div style="font-family:var(--mono);font-size:10px;">Click <b>⬇ DOWNLOAD CAMPAIGNS.JSON</b> → replace file in md-dashboard folder → run bat file</div>
+            <div style="font-family:var(--mono);font-size:10px;">Campaigns are saved live to Supabase. Use JSON export only as an optional backup/audit copy.</div>
           </div>
           <div style="display:flex;gap:10px;align-items:flex-start;">
             <span style="font-family:var(--display);font-size:18px;color:rgba(255,255,255,.5);flex-shrink:0;">4</span>
@@ -873,13 +873,11 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
       </div>
 
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-top:12px;">
-        <div style="font-family:var(--display);font-size:16px;letter-spacing:.05em;margin-bottom:6px;">After creating campaigns:</div>
+        <div style="font-family:var(--display);font-size:16px;letter-spacing:.05em;margin-bottom:6px;">Campaign backup:</div>
         <div style="font-family:var(--mono);font-size:10px;color:#555;margin-bottom:10px;">
-          1. Click the button below to download<br>
-          2. Replace <b>campaigns.json</b> in your md-dashboard folder<br>
-          3. Run <b>update_dashboard.bat</b> → agents see campaigns immediately
+          Optional backup. Campaigns are now saved live to Supabase — no JSON download needed for normal operation.
         </div>
-        <button class="save-btn" onclick="saveCampaignsJSON()" style="background:#2a7a4b;width:100%;font-size:16px;">⬇ DOWNLOAD CAMPAIGNS.JSON</button>
+        <button class="save-btn" onclick="saveCampaignsJSON()" style="background:#2a7a4b;width:100%;font-size:16px;">⬇ EXPORT BACKUP (JSON)</button>
       </div>
       <div class="save-toast" id="save-toast-camp">✓ Campaign created</div>
     </div>
@@ -1099,6 +1097,7 @@ const DEFAULT_AGENT_PINS = {
 
 // ═══════════════════════════════════════════════════════════════════════
 // KPI Manual Entry (new_accounts + vip_count)
+// Supabase SQL: ALTER TABLE kpi_manual ADD COLUMN IF NOT EXISTS campaign_pct integer DEFAULT 0;
 // ═══════════════════════════════════════════════════════════════════════
 const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
@@ -1160,21 +1159,24 @@ async function loadKpiManual() {
 
   // Render form: one row per agent
   form.innerHTML = `
-    <div style="display:grid;grid-template-columns:100px 140px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:2px solid var(--border);font-family:var(--mono);font-size:9px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em;">
+    <div style="display:grid;grid-template-columns:100px 130px 130px 130px 130px;gap:8px;align-items:center;padding:8px 0;border-bottom:2px solid var(--border);font-family:var(--mono);font-size:9px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em;">
       <div>Agent</div>
       <div>新户口 (new_accounts)</div>
       <div>VIP招聘 (vip_count)</div>
       <div>做Event/PSR (event_count)</div>
+      <div>Campaign % (0-100)</div>
     </div>
   ` + agents.map(agent => {
     const row = existing[agent] || {};
-    return `<div style="display:grid;grid-template-columns:100px 140px 140px 140px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
+    return `<div style="display:grid;grid-template-columns:100px 130px 130px 130px 130px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
       <div style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink);">${agent}</div>
       <input type="number" id="kpi_m_new_${agent}" min="0" value="${row.new_accounts ?? 0}" step="1"
         style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
       <input type="number" id="kpi_m_vip_${agent}" min="0" value="${row.vip_count ?? 0}" step="1"
         style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
       <input type="number" id="kpi_m_event_${agent}" min="0" value="${row.event_count ?? 0}" step="1"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
+      <input type="number" id="kpi_m_camp_${agent}" min="0" max="100" value="${row.campaign_pct ?? 0}" step="1"
         style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:6px 8px;text-align:center;">
     </div>`;
   }).join('');
@@ -1189,14 +1191,16 @@ async function saveKpiManual() {
     const newAccInput = document.getElementById(`kpi_m_new_${agent}`);
     const vipInput    = document.getElementById(`kpi_m_vip_${agent}`);
     const eventInput  = document.getElementById(`kpi_m_event_${agent}`);
+    const campInput   = document.getElementById(`kpi_m_camp_${agent}`);
     if (!newAccInput || !vipInput) return null;
     return {
       month, agent,
-      new_accounts: parseInt(newAccInput.value) || 0,
-      vip_count:    parseInt(vipInput.value) || 0,
-      event_count:  parseInt(eventInput?.value) || 0,
-      updated_at:   new Date().toISOString(),
-      updated_by:   'admin_ui'
+      new_accounts:  parseInt(newAccInput.value) || 0,
+      vip_count:     parseInt(vipInput.value) || 0,
+      event_count:   parseInt(eventInput?.value) || 0,
+      campaign_pct:  Math.min(100, Math.max(0, parseInt(campInput?.value) || 0)),
+      updated_at:    new Date().toISOString(),
+      updated_by:    'admin_ui'
     };
   }).filter(Boolean);
 
@@ -1241,8 +1245,6 @@ async function renderPinForm() {
   // Try to load fresh PINs from Supabase first
   let pinsFromSupabase = null;
   try {
-    const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-    const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
     const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_pins?select=agent,pin`, {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     });
@@ -1291,8 +1293,6 @@ async function savePins() {
   if (Object.keys(pins).length === 0) { alert('No valid PINs to save'); return; }
 
   // Save to Supabase (primary, live)
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
   const rows = Object.entries(pins).map(([agent, pin]) => ({
     agent, pin, updated_at: new Date().toISOString(), updated_by: 'admin_ui'
   }));
@@ -1954,8 +1954,6 @@ async function archiveSelectedMonth() {
   }
 
   // Upsert to Supabase
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
 
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_monthly_archive?on_conflict=month,agent`, {
@@ -2030,8 +2028,6 @@ function extractArchiveRow(agent, adata, month) {
 }
 
 async function renderArchiveList() {
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
   const list = document.getElementById('archive-list');
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_monthly_archive?select=month,agent,comm_total,captured_at,captured_method&order=month.desc,agent.asc`, {
@@ -2384,8 +2380,6 @@ setInterval(() => {
 
 // Saves all 7 target sections to Supabase tables.
 async function saveAllToSupabase() {
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
   const headers = {
     'apikey': SUPABASE_KEY,
     'Authorization': 'Bearer ' + SUPABASE_KEY,
@@ -2540,8 +2534,6 @@ function exportJSON() {
 // Phase C: Load targets from Supabase into CONFIG.
 // Assembles all 7 tables into targets.json-shape object.
 async function loadConfigFromSupabase() {
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
   const headers = { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY };
 
   const fetchTable = async (table) => {
@@ -2980,6 +2972,7 @@ function importExcel(input) {
         } else {
           CAMPAIGNS_DATA.campaigns.push(campObj);
         }
+        // TODO: push imported campaigns to Supabase
         saveCampaignsData();
         imported.push(`✓ Campaign "${campObj.name}" (${debtors.length} debtors)`);
       }
@@ -3282,7 +3275,7 @@ function renderAdminBrandSKU() {
   const el = document.getElementById('admin-brand-sku-status');
   if (!el) return;
 
-  const BRANDS   = ['iFACE','SUKUN','BISON','TR20','EVO','LAM+LWM'];
+  const BRANDS   = ['iFACE','SUKUN','EVO','BISON','TR20','LAM+LWM'];
   const AUTO_B   = new Set(['iFACE','SUKUN','BISON','TR20']);
   const agents   = Object.keys(CONFIG.agents || {}).sort();
 
@@ -3407,6 +3400,7 @@ async function _adminSupabaseFetch(path, opts = {}) {
   const headers = Object.assign({
     apikey: SUPABASE_KEY,
     Authorization: `Bearer ${SUPABASE_KEY}`,
+    'Content-Type': 'application/json',
   }, opts.headers || {});
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, Object.assign({}, opts, { headers }));
   if (!r.ok) throw new Error(await r.text());
@@ -3769,29 +3763,249 @@ function bdayExcludeDebtor(code) {
 let CAMPAIGNS_DATA = { campaigns: [] };
 let _campFileDebtors = [];
 
-async function loadCampaignsData() {
-  // Load from campaigns.json (source of truth) then fall back to localStorage
+function _campNumOrNull(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _campTextOrNull(v) {
+  const s = String(v ?? '').trim();
+  return s ? s : null;
+}
+
+function _campGroupBy(rows, key) {
+  return (rows || []).reduce((acc, row) => {
+    const k = row?.[key];
+    if (!k) return acc;
+    (acc[k] ||= []).push(row);
+    return acc;
+  }, {});
+}
+
+function _campParseRuleNotes(notes) {
+  if (!notes) return {};
   try {
-    const r = await fetch('campaigns.json?v=' + Date.now());
-    if (r.ok) {
-      const fromFile = await r.json();
-      // Merge: file wins, but keep any localStorage-only campaigns not in file
-      const fileIds = new Set((fromFile.campaigns||[]).map(c=>c.id));
-      const lsRaw   = localStorage.getItem('touro_campaigns');
-      const lsData  = lsRaw ? JSON.parse(lsRaw) : { campaigns: [] };
-      const lsOnly  = (lsData.campaigns||[]).filter(c => !fileIds.has(c.id));
-      CAMPAIGNS_DATA = { ...fromFile, campaigns: [...(fromFile.campaigns||[]), ...lsOnly] };
-      localStorage.setItem('touro_campaigns', JSON.stringify(CAMPAIGNS_DATA));
-      renderCampaignsList();
-      return;
+    const parsed = JSON.parse(notes);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : { notes };
+  } catch {
+    return { notes };
+  }
+}
+
+function _campRuleNotes(rule) {
+  const notes = {};
+  if (rule?.max_redempt !== undefined && rule.max_redempt !== '') notes.max_redempt = rule.max_redempt;
+  if (rule?.accumulative !== undefined && rule.accumulative !== '') notes.accumulative = !!rule.accumulative;
+  return Object.keys(notes).length ? JSON.stringify(notes) : _campTextOrNull(rule?.notes);
+}
+
+function _campRuleFromDb(row) {
+  const extra = _campParseRuleNotes(row.notes);
+  return {
+    promo: row.promo_detail || '',
+    promo_detail: row.promo_detail || '',
+    min_ctn: row.min_order_ctn ?? '',
+    min_order_ctn: row.min_order_ctn ?? null,
+    foc_item: row.foc_item ?? '',
+    foc_qty: row.foc_qty ?? '',
+    foc_unit: row.foc_unit ?? '',
+    foc_type: row.foc_type ?? '',
+    cap: row.cap ?? null,
+    target_pct: row.target_pct ?? null,
+    target_label: row.target_label ?? '',
+    ...extra
+  };
+}
+
+function _campFromDb(row, rulesByCampaign, debtorsByCampaign) {
+  const brands = Array.isArray(row.brands) ? row.brands : (row.brands ? [row.brands] : []);
+  const catRules = {};
+  (rulesByCampaign[row.id] || []).forEach(rule => {
+    if (rule.cat_group) catRules[rule.cat_group] = _campRuleFromDb(rule);
+  });
+  const debtors = (debtorsByCampaign[row.id] || []).map(d => ({
+    code: d.debtor_code || '',
+    debtor_code: d.debtor_code || '',
+    name: d.debtor_name || '',
+    debtor_name: d.debtor_name || '',
+    agent: d.agent || '',
+    cat: d.cat || '',
+    cat_group: d.cat_group || '',
+    debtor_type: d.debtor_type || '',
+    foc_item: d.foc_item || '',
+    foc_qty: d.foc_qty ?? '',
+    foc_unit: d.foc_unit || '',
+    foc_type: d.foc_type || '',
+    rebate: d.rebate ?? null,
+    foc_item2: d.foc_item_2 || '',
+    foc_qty2: d.foc_qty_2 ?? '',
+    foc_item_2: d.foc_item_2 || '',
+    foc_qty_2: d.foc_qty_2 ?? '',
+    foc_unit_2: d.foc_unit_2 || '',
+    avg_ctn: d.avg_ctn ?? null,
+    promo_logic: d.promo_logic || '',
+    approval: !!d.approval,
+    approval_note: d.approval_note || '',
+    notes: d.notes || ''
+  }));
+  return {
+    id: row.id,
+    name: row.name || '',
+    type: row.type || 'other',
+    brand: brands.length === 1 ? brands[0] : '',
+    brands,
+    description: row.description || '',
+    promo_detail: row.promo_detail || '',
+    min_order_ctn: row.min_order_ctn ?? null,
+    cat_rules: catRules,
+    default_foc_item: row.default_foc_item || '',
+    default_foc_qty: row.default_foc_qty ?? '',
+    default_foc_unit: row.default_foc_unit || '',
+    default_foc_type: row.default_foc_type || '',
+    default_foc_item_2: row.default_foc_item_2 || '',
+    default_foc_qty_2: row.default_foc_qty_2 ?? '',
+    default_foc_unit_2: row.default_foc_unit_2 || '',
+    foc_note: row.foc_note || '',
+    festive_occasion: row.festive_occasion || '',
+    conditions: row.conditions || [],
+    no_cap: !!row.no_cap,
+    active: row.active !== false,
+    start_date: row.start_date || null,
+    deadline: row.deadline || '',
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+    debtors
+  };
+}
+
+function _campCampaignToDb(camp) {
+  const brands = Array.isArray(camp.brands) ? camp.brands : (camp.brand ? [camp.brand] : []);
+  return {
+    id: camp.id,
+    name: camp.name,
+    type: camp.type || 'other',
+    brands,
+    description: camp.description || null,
+    promo_detail: camp.promo_detail || null,
+    foc_note: camp.foc_note || null,
+    conditions: Array.isArray(camp.conditions) ? camp.conditions : [],
+    festive_occasion: camp.festive_occasion || null,
+    min_order_ctn: _campNumOrNull(camp.min_order_ctn),
+    default_foc_item: _campTextOrNull(camp.default_foc_item),
+    default_foc_qty: _campNumOrNull(camp.default_foc_qty),
+    default_foc_unit: _campTextOrNull(camp.default_foc_unit),
+    default_foc_type: _campTextOrNull(camp.default_foc_type),
+    default_foc_item_2: _campTextOrNull(camp.default_foc_item_2 || camp.foc_item2),
+    default_foc_qty_2: _campNumOrNull(camp.default_foc_qty_2 || camp.foc_qty2),
+    default_foc_unit_2: _campTextOrNull(camp.default_foc_unit_2 || camp.foc_unit2),
+    no_cap: !!camp.no_cap,
+    active: camp.active !== false,
+    start_date: camp.start_date || null,
+    deadline: camp.deadline || null,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function _campRuleToDb(campaignId, catGroup, rule) {
+  return {
+    campaign_id: campaignId,
+    cat_group: catGroup,
+    min_order_ctn: _campNumOrNull(rule?.min_order_ctn ?? rule?.min_ctn),
+    foc_item: _campTextOrNull(rule?.foc_item),
+    foc_qty: _campNumOrNull(rule?.foc_qty),
+    foc_unit: _campTextOrNull(rule?.foc_unit),
+    foc_type: _campTextOrNull(rule?.foc_type),
+    promo_detail: rule?.promo_detail || rule?.promo || null,
+    cap: _campNumOrNull(rule?.cap),
+    target_pct: _campNumOrNull(rule?.target_pct),
+    target_label: _campTextOrNull(rule?.target_label),
+    notes: _campRuleNotes(rule)
+  };
+}
+
+function _campDebtorToDb(campaignId, debtor) {
+  const cat = debtor.cat || '';
+  const catGroup = debtor.cat_group || (cat ? String(cat).trim().charAt(0).toUpperCase() : null);
+  return {
+    campaign_id: campaignId,
+    debtor_code: debtor.code || debtor.debtor_code || '',
+    debtor_name: debtor.name || debtor.debtor_name || null,
+    agent: debtor.agent || null,
+    cat: debtor.cat || null,
+    cat_group: catGroup || null,
+    debtor_type: debtor.debtor_type || null,
+    foc_item: _campTextOrNull(debtor.foc_item),
+    foc_qty: _campNumOrNull(debtor.foc_qty),
+    foc_unit: _campTextOrNull(debtor.foc_unit),
+    foc_type: _campTextOrNull(debtor.foc_type),
+    rebate: _campNumOrNull(debtor.rebate),
+    foc_item_2: _campTextOrNull(debtor.foc_item_2 || debtor.foc_item2),
+    foc_qty_2: _campNumOrNull(debtor.foc_qty_2 || debtor.foc_qty2),
+    foc_unit_2: _campTextOrNull(debtor.foc_unit_2 || debtor.foc_unit2),
+    avg_ctn: _campNumOrNull(debtor.avg_ctn),
+    promo_logic: _campTextOrNull(debtor.promo_logic),
+    approval: !!debtor.approval,
+    approval_note: debtor.approval_note || null,
+    notes: debtor.notes || null
+  };
+}
+
+async function _campPostRows(table, rows) {
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += 500) {
+    await _adminSupabaseFetch(table, {
+      method: 'POST',
+      headers: { 'Prefer': 'return=minimal' },
+      body: JSON.stringify(rows.slice(i, i + 500))
+    });
+  }
+}
+
+async function _campPatchCampaign(id, payload) {
+  return _adminSupabaseFetch(`campaigns?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Prefer': 'return=minimal' },
+    body: JSON.stringify({ ...payload, updated_at: new Date().toISOString() })
+  });
+}
+
+async function _campDeleteCampaign(id) {
+  return _adminSupabaseFetch(`campaigns?id=eq.${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'Prefer': 'return=minimal' }
+  });
+}
+
+async function loadCampaignsData() {
+  try {
+    const [campaignRows, ruleRows, debtorRows] = await Promise.all([
+      _adminSupabaseFetch('campaigns?select=*&order=created_at.desc'),
+      _adminSupabaseFetch('campaign_cat_rules?select=*'),
+      _adminSupabaseFetch('campaign_debtors?select=*&order=debtor_code.asc')
+    ]);
+    const rulesByCampaign = _campGroupBy(ruleRows || [], 'campaign_id');
+    const debtorsByCampaign = _campGroupBy(debtorRows || [], 'campaign_id');
+    CAMPAIGNS_DATA = { campaigns: (campaignRows || []).map(row => _campFromDb(row, rulesByCampaign, debtorsByCampaign)) };
+    localStorage.setItem('touro_campaigns', JSON.stringify(CAMPAIGNS_DATA));
+  } catch(e) {
+    console.warn('Supabase campaign load failed; using local fallback', e);
+    try { CAMPAIGNS_DATA = JSON.parse(localStorage.getItem('touro_campaigns')||'{"campaigns":[]}'); }
+    catch(err) { CAMPAIGNS_DATA = { campaigns: [] }; }
+    if (!(CAMPAIGNS_DATA.campaigns || []).length) {
+      try {
+        const r = await fetch('campaigns.json?v=' + Date.now());
+        if (r.ok) CAMPAIGNS_DATA = await r.json();
+      } catch(err) { console.warn('campaigns.json fallback failed', err); }
     }
-  } catch(e) { /* fallback */ }
-  try { CAMPAIGNS_DATA = JSON.parse(localStorage.getItem('touro_campaigns')||'{"campaigns":[]}'); }
-  catch(e) { CAMPAIGNS_DATA = { campaigns: [] }; }
+  }
+  renderCampaignsList();
+  populateBulkCampSelect();
 }
 function saveCampaignsData() {
   localStorage.setItem('touro_campaigns', JSON.stringify(CAMPAIGNS_DATA));
   renderCampaignsList();
+  populateBulkCampSelect();
 }
 
 function renderCatRules(cats) {
@@ -3850,7 +4064,7 @@ function clearCampFile() {
   _campFileDebtors = [];
 }
 
-function createCampaign() {
+async function createCampaign() {
   const name     = document.getElementById('new-camp-name').value.trim();
   const type     = document.getElementById('new-camp-type').value;
   const desc     = document.getElementById('new-camp-desc').value.trim();
@@ -3872,7 +4086,7 @@ function createCampaign() {
   const focNote  = document.getElementById('new-camp-foc-note')?.value?.trim()||'';
   const festive  = document.getElementById('new-camp-festive')?.value||'';
 
-  CAMPAIGNS_DATA.campaigns.push({
+  const camp = {
     id:'camp_'+Date.now(), name, type, description:desc,
     brands, promo_detail:promo, min_order_ctn:minOrder,
     cat_rules: catRules,
@@ -3884,7 +4098,34 @@ function createCampaign() {
     festive_occasion:  festive,
     created_at:new Date().toISOString().split('T')[0],
     deadline, active:true, debtors:_campFileDebtors,
-  });
+  };
+
+  let insertedCampaign = false;
+  try {
+    await _adminSupabaseFetch('campaigns', {
+      method: 'POST',
+      headers: { 'Prefer': 'return=representation' },
+      body: JSON.stringify(_campCampaignToDb(camp))
+    });
+    insertedCampaign = true;
+
+    const ruleRows = Object.entries(camp.cat_rules || {})
+      .map(([catGroup, rule]) => _campRuleToDb(camp.id, catGroup, rule));
+    await _campPostRows('campaign_cat_rules', ruleRows);
+
+    const debtorRows = (camp.debtors || []).map(d => _campDebtorToDb(camp.id, d));
+    await _campPostRows('campaign_debtors', debtorRows);
+  } catch (e) {
+    if (insertedCampaign) {
+      try { await _campDeleteCampaign(camp.id); }
+      catch (rollbackErr) { console.error('Campaign rollback failed', rollbackErr); }
+    }
+    console.error('Campaign create failed', e);
+    alert('Failed to save campaign to Supabase. No campaign was kept locally.');
+    return;
+  }
+
+  CAMPAIGNS_DATA.campaigns.push(camp);
   saveCampaignsData();
 
   // Reset form
@@ -3989,9 +4230,17 @@ function toggleBrandFields(type) {
     type === 'festive_gift' ? 'block' : 'none';
 }
 
-function closeCampaign(id) {
+async function closeCampaign(id) {
   const c=CAMPAIGNS_DATA.campaigns.find(x=>x.id===id);
-  if(c&&confirm(`Close campaign "${c.name}"?`)){c.active=false;saveCampaignsData();}
+  if(!c || !confirm(`Close campaign "${c.name}"?`)) return;
+  try {
+    await _campPatchCampaign(id, { active: false });
+    c.active=false;
+    saveCampaignsData();
+  } catch(e) {
+    console.error('Close campaign failed', e);
+    alert('Failed to close campaign in Supabase.');
+  }
 }
 
 function renderCampaignsList() {
@@ -4029,7 +4278,7 @@ function renderCampaignsList() {
         </div>
         <div style="display:flex;gap:6px;margin-left:8px;flex-shrink:0;">
           <button onclick="editCampaign('${c.id}')" style="background:none;border:1px solid var(--border);color:var(--blue);font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">✏ Edit</button>
-          ${!isInactive?`<button onclick="closeCampaign('${c.id}')" style="background:none;border:1px solid #ddd;color:#888;font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">Close</button>`:`<button onclick="reopenCampaign('${c.id}')" style="background:none;border:1px solid var(--green);color:var(--green);font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">Reopen</button>`}
+          ${!isInactive?`<button onclick="closeCampaign('${c.id}')" style="background:none;border:1px solid #ddd;color:#888;font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">Close</button>`:`<button onclick="reopenCampaign('${c.id}')" style="background:none;border:1px solid var(--green);color:var(--green);font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">Reopen</button><button onclick="hardDeleteCampaign('${c.id}')" style="background:none;border:1px solid rgba(255,90,90,.45);color:#ff5a5a;font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:6px;cursor:pointer;">Delete forever</button>`}
         </div>
       </div>
       <div style="font-family:var(--mono);font-size:10px;color:#555;">📋 ${c.debtors?.length||0} debtors &nbsp;·&nbsp; ⏰ ${c.deadline||'no deadline'} &nbsp;·&nbsp; 📅 Start: ${c.start_date||c.created_at||'—'}</div>
@@ -4056,24 +4305,62 @@ function cancelCampEdit(id) {
   if (promoDisp) promoDisp.style.display = 'block';
 }
 
-function saveCampEdit(id) {
+async function saveCampEdit(id) {
   const camp = CAMPAIGNS_DATA.campaigns.find(c=>c.id===id);
   if (!camp) return;
   const name     = document.getElementById('camp-edit-name-'+id)?.value?.trim();
   const desc     = document.getElementById('camp-edit-desc-'+id)?.value?.trim();
   const promo    = document.getElementById('camp-edit-promo-'+id)?.value?.trim();
   const deadline = document.getElementById('camp-edit-deadline-'+id)?.value;
-  if (name)     camp.name         = name;
-  if (desc !== undefined) camp.description  = desc;
-  if (promo !== undefined) camp.promo_detail = promo;
-  if (deadline) camp.deadline     = deadline;
-  saveCampaignsData();
-  renderCampaignsList();
+  const payload = {
+    name: name || camp.name,
+    description: desc ?? '',
+    promo_detail: promo ?? '',
+    deadline: deadline || camp.deadline || null
+  };
+  try {
+    await _campPatchCampaign(id, payload);
+    camp.name         = payload.name;
+    camp.description  = payload.description || '';
+    camp.promo_detail = payload.promo_detail || '';
+    camp.deadline     = payload.deadline || '';
+    saveCampaignsData();
+    renderCampaignsList();
+  } catch(e) {
+    console.error('Save campaign edit failed', e);
+    alert('Failed to save campaign edit to Supabase.');
+  }
 }
 
-function reopenCampaign(id) {
+async function reopenCampaign(id) {
   const c = CAMPAIGNS_DATA.campaigns.find(x=>x.id===id);
-  if (c) { c.active = true; saveCampaignsData(); renderCampaignsList(); }
+  if (!c) return;
+  try {
+    await _campPatchCampaign(id, { active: true });
+    c.active = true;
+    saveCampaignsData();
+    renderCampaignsList();
+  } catch(e) {
+    console.error('Reopen campaign failed', e);
+    alert('Failed to reopen campaign in Supabase.');
+  }
+}
+
+async function hardDeleteCampaign(id) {
+  const c = CAMPAIGNS_DATA.campaigns.find(x=>x.id===id);
+  if (!c) return;
+  if (!confirm(`Delete campaign "${c.name}" forever? This removes its rules and debtor rows from Supabase.`)) return;
+  const typed = prompt(`Type the campaign name exactly to confirm permanent deletion:\n${c.name}`);
+  if (typed !== c.name) { alert('Campaign name did not match. Delete cancelled.'); return; }
+  try {
+    await _campDeleteCampaign(id);
+    CAMPAIGNS_DATA.campaigns = CAMPAIGNS_DATA.campaigns.filter(x=>x.id!==id);
+    saveCampaignsData();
+    renderCampaignsList();
+  } catch(e) {
+    console.error('Hard delete campaign failed', e);
+    alert('Failed to delete campaign from Supabase.');
+  }
 }
 
 function populateBulkCampSelect() {
@@ -4137,8 +4424,6 @@ function _validateCodes(codes, selectedAgent) {
 
 // Check Supabase: which (month, agent, camp_id, debtor_code) already exist as delivered
 async function _fetchExistingClaims(month, campId, agents, codes) {
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
 
   // Query: all delivered claims for this month+camp where agent IN (...) AND debtor_code IN (...)
   const agentsFilter = agents.map(a => `"${a}"`).join(',');
@@ -4311,8 +4596,6 @@ async function confirmBulkMark() {
   }
 
   // Actually write to Supabase
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
   const now = new Date();
   // Supabase `ts` column is timestamptz — needs ISO format, not display format
   const ts = now.toISOString();
@@ -4412,8 +4695,6 @@ document.getElementById('pw-input').addEventListener('keydown', e => {
 const GistSync = (() => {
 
   // ── Configuration ────────────────────────────────────────────────────
-  const SUPABASE_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw';
 
   const CACHE_KEY    = 'md_gist_cache';
   const CACHE_TS_KEY = 'md_gist_cache_ts';

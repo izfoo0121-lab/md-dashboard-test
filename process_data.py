@@ -1713,96 +1713,6 @@ def save_penetration_snapshot(brand_comm, targets, cur_month):
 
 
 
-    """
-    Auto-generate birthday gift list:
-    - VIP debtors only
-    - Exclude P-Personal
-    - Exclude new accounts opened this month
-    - Target = total qualifying debtors (management audits agent's actual)
-    """
-    log("Generating birthday campaign list...")
-    today     = date.today()
-    overrides = targets.get("birthday_overrides", {})
-    PERSONAL_TYPES = {"P-Personal","P-PERSONAL","personal","Personal","PERSONAL"}
-
-    birthday_debtors = []
-    for agent, adata in debtor_cards.items():
-        for d in adata.get("debtors", []):
-            code       = d.get("debtor_code", "")
-            db_type    = d.get("debtor_type", "")
-            is_vip     = d.get("vip", False)
-            is_personal = db_type in PERSONAL_TYPES
-            is_new     = d.get("is_new", False)  # new account this month
-
-            # Criteria: birthday this month + VIP + not personal + not new account
-            # Recompute birthday match for selected month (not today)
-            birth_date = d.get("birth_date_raw") or None
-            birthday_matches = False
-            if birth_date:
-                try:
-                    bd = _parse_birth_date(birth_date)
-                    if bd is not None and not pd.isnull(bd):
-                        birthday_matches = (bd.month == bday_month)
-                except:
-                    pass
-            # Fallback: use birth_month (1-12) if raw date unavailable
-            if not birth_date:
-                stored_birth_month = d.get("birth_month")
-                if stored_birth_month is not None:
-                    birthday_matches = (int(stored_birth_month) == bday_month)
-                else:
-                    birthday_matches = d.get("birthday_this_month", False)
-
-            if (birthday_matches
-                    and is_vip
-                    and not is_personal
-                    and not is_new
-                    and overrides.get(code) != "remove"):
-                birthday_debtors.append({
-                    "code":   code,
-                    "name":   d.get("company_name", code),
-                    "agent":  agent,
-                    "type":   db_type,
-                    "phone":  d.get("phone", ""),
-                    "source": "auto",
-                })
-
-    # Marketing manual overrides — add specific debtors
-    for code, action in overrides.items():
-        if action == "add":
-            for agent, adata in debtor_cards.items():
-                d = next((x for x in adata.get("debtors",[]) if x.get("debtor_code")==code), None)
-                if d:
-                    birthday_debtors.append({
-                        "code":   code,
-                        "name":   d.get("company_name", code),
-                        "agent":  agent,
-                        "type":   d.get("debtor_type",""),
-                        "phone":  d.get("phone",""),
-                        "source": "manual",
-                    })
-                    break
-
-    # Remove duplicates
-    seen = set(); result = []
-    for d in birthday_debtors:
-        if d["code"] not in seen:
-            seen.add(d["code"])
-            result.append(d)
-
-    # Group by agent for per-agent target
-    by_agent = {}
-    for d in result:
-        by_agent.setdefault(d["agent"], []).append(d)
-
-    log(f"  Birthday campaign: {len(result)} VIP debtors ({today.strftime('%B %Y')}) — excl new accounts & personal")
-    return {
-        "month":    today.strftime("%B %Y"),
-        "count":    len(result),
-        "debtors":  result,
-        "by_agent": {a: len(v) for a, v in by_agent.items()},
-    }
-
 
 def calc_brand_campaigns(df, targets, agents, cur_month, prev_months, brand_config):
     """
@@ -1936,39 +1846,6 @@ def calc_brand_campaigns(df, targets, agents, cur_month, prev_months, brand_conf
 
 
 
-    """
-    Group-level CTN vs target for 7 brands.
-    Actual = sum of ALL agents' paid CTN for that brand's item codes.
-    No RM36 filter (even for EVO).
-    Target set monthly in Admin Page as single value per brand.
-    """
-    log("Calculating Group Brand Targets...")
-
-    # Canggih paid this month only
-    paid = df[
-        (df["item_group"] != EIGHTCOM_GROUP) &
-        (df["paid_on"] == cur_month)
-    ]
-
-    group_targets = targets.get("group_brand_targets", {})
-    result = {}
-
-    for brand, codes in group_brand_config.items():
-        brand_rows = paid[paid["item_code"].isin(codes)]
-        actual_ctn = round(float(brand_rows["qty_ctn"].sum()), 2)
-        target_ctn = group_targets.get(brand)
-
-        result[brand] = {
-            "item_codes":  codes,
-            "actual_ctn":  actual_ctn,
-            "target_ctn":  target_ctn,
-            "gap":         round(actual_ctn - target_ctn, 2) if target_ctn else None,
-            "pct":         pct(actual_ctn, target_ctn),
-            "color":       color_code(pct(actual_ctn, target_ctn)),
-        }
-
-    return result
-
 
 # ── Team summary ──────────────────────────────────────────────────────────────
 
@@ -2007,11 +1884,12 @@ def _calc_cur_month_invoiced_paid(df, cur_month):
         return 0
 
 def _calc_total_sales_ctn(df, cur_month):
-    """Sum all (paid + unpaid) canggih CTN for current month."""
+    """Sum all (paid + unpaid) canggih CTN for current month (invoice basis)."""
     if df is None: return 0
     try:
         canggih = df[df["item_group"] != EIGHTCOM_GROUP]
-        return round(float(canggih[canggih["invoice_month"] == cur_month]["qty_ctn"].sum()), 2)             if "invoice_month" in df.columns             else round(float(canggih[canggih["paid_on"] == cur_month]["qty_ctn"].sum()), 2)
+        col = "tranx_mth_full" if "tranx_mth_full" in canggih.columns else "paid_on"
+        return round(float(canggih[canggih[col] == cur_month]["qty_ctn"].sum()), 2)
     except: return 0
 
 def calc_team_summary(sales_prog, brand_comm, agents, targets, cur_month, df=None, prev_months=None):
@@ -2375,13 +2253,15 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                     "source": source, "excluded": False,
                 }
 
-            elif key in ("new_accounts", "vip_count", "event"):
+            elif key in ("new_accounts", "vip_count", "event", "campaign_1"):
                 # Admin-entered actual via Supabase kpi_manual table.
                 # Dashboard overrides `actual` from Supabase at render time.
                 # Target still uses auto_targets (snapshot-based) for new_accounts/vip_count,
                 # or per-agent kpi_targets for event.
                 if key == "event":
                     target = tgt("event", 16)
+                elif key == "campaign_1":
+                    target = 100  # entered as percentage 0-100
                 else:
                     target = auto_targets.get(key, 1)
                 items_out[key] = {
@@ -2411,7 +2291,6 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
                 }
 
             elif key in ("alt_channel_contact", "alt_channel_deliver",
-                         "campaign_1",
                          "d_key_accuracy","d_account_accuracy","d_outstanding","d_followup",
                          "e_punctuality","e_warehouse","e_efficiency","e_check_car","e_check_stock"):
                 # Direct score entry — actual entered as score out of max
@@ -2747,16 +2626,15 @@ def main():
             pred_rows = df[df["agent"] == pred].copy()
             # Determine each row's month from invoice_date or paid_on
             for idx, row in pred_rows.iterrows():
-                row_month = str(row.get("inv_month", "") or row.get("cur_month", "") or "").strip()
+                row_month = ""
+                inv_date_val = row.get("date_parsed")
+                if pd.notnull(inv_date_val):
+                    try:
+                        row_month = pd.Timestamp(inv_date_val).strftime("%b-%y")
+                    except:
+                        pass
                 if not row_month:
-                    # fallback: derive from invoice date
-                    inv_date = str(row.get("inv_date","")).strip()
-                    if inv_date and inv_date not in ("","nan"):
-                        try:
-                            from datetime import datetime as _dt
-                            d = _dt.strptime(inv_date[:10], "%Y-%m-%d")
-                            row_month = d.strftime("%b-%y")
-                        except: pass
+                    row_month = str(row.get("tranx_mth_full", "") or row.get("paid_on", "")).strip()
                 if month_key(row_month) >= from_key:
                     new_row = row.copy()
                     new_row["agent"] = successor
@@ -2849,6 +2727,62 @@ def main():
             "inherited_from":     ag_cfg.get("inherits_from", None),
             "inherit_from_month": ag_cfg.get("inherit_from_month", None),
         }
+
+    # ── Supabase KPI manual scores fetch (from kpi_manual table) ────
+    try:
+        import requests as _req
+        _SB_URL = 'https://rqitgmydcbyiygqjssrb.supabase.co'
+        _SB_KEY = 'sb_publishable_8xb7ZaHyr3OF3WNEqufuDg_67spOIFw'
+        _resp = _req.get(
+            f"{_SB_URL}/rest/v1/kpi_manual",
+            params={"select": "*", "month": f"eq.{cur_month}"},
+            headers={"apikey": _SB_KEY, "Authorization": f"Bearer {_SB_KEY}"},
+            timeout=10
+        )
+        if _resp.ok:
+            # Build lookup: agent -> {new_accounts: N, vip_count: N, ...}
+            _sb_kpi = {}
+            for r in _resp.json():
+                _ag = (r.get('agent') or '').upper()
+                if _ag:
+                    _sb_kpi[_ag] = {
+                        'new_accounts': r.get('new_accounts', 0) or 0,
+                        'vip_count':    r.get('vip_count', 0) or 0,
+                        'event':        r.get('event_count', 0) or 0,
+                        'campaign_1':   r.get('campaign_pct', 0) or 0,
+                    }
+            _applied = 0
+            for _agent, _adata in output.get('agents', {}).items():
+                _items = _adata.get('kpi', {}).get('items', {})
+                _scores = _sb_kpi.get(_agent, {})
+                if not _scores:
+                    continue
+                for _key, _item in _items.items():
+                    if not _item.get('needs_supabase_fetch'):
+                        continue
+                    if _key in _scores:
+                        _item['actual'] = _scores[_key]
+                        _tgt = _item.get('target') or 1
+                        _max = _item.get('max_score') or 0
+                        _item['score'] = round(min(_item['actual'] / _tgt, 1) * _max, 2)
+                        _item['pct'] = round((_item['actual'] / _tgt) * 100) if _tgt else 0
+                # Recompute KPI totals for this agent
+                _kpi = _adata.get('kpi', {})
+                _all_items = _kpi.get('items', {})
+                if _all_items:
+                    _kpi['grand_total'] = round(sum(i.get('score', 0) for i in _all_items.values()), 2)
+                    _kpi['total_abc'] = round(sum(i.get('score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C')), 2)
+                    _max_total = sum(i.get('max_score', 0) for i in _all_items.values())
+                    _max_abc = sum(i.get('max_score', 0) for i in _all_items.values() if i.get('section') in ('A', 'B', 'C'))
+                    _kpi['grand_pct'] = round(_kpi['grand_total'] / _max_total * 100, 1) if _max_total else 0
+                    _kpi['total_pct'] = round(_kpi['total_abc'] / _max_abc * 100, 1) if _max_abc else 0
+                _applied += 1
+            log(f"   [Supabase KPI] Applied manual scores for {_applied} agents")
+        else:
+            log(f"   [Supabase KPI] Fetch failed: {_resp.status_code}")
+    except Exception as _e:
+        log(f"   [Supabase KPI] Skipped: {_e}")
+    # ────────────────────────────────────────────────────────────────
 
     # ── Write JSON ──────────────────────────────────────────────────
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
