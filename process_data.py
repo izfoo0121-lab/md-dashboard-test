@@ -1579,6 +1579,13 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
                     or d.get("debtor_type","") in PERSONAL_TYPES)
         non_personal   = [d for d in debtor_cards if not _is_personal(d)]
         personal_count = len(debtor_cards) - len(non_personal)
+        dm_non_personal_live = [
+            code for code in dm_debtor_codes
+            if not _is_personal({
+                "type": debtor_info.get(code, {}).get("type", ""),
+                "debtor_type": debtor_info.get(code, {}).get("type", ""),
+            })
+        ]
 
         # Summary counts — ALL exclude Personal
         active_count   = sum(1 for d in non_personal if d["status"] == "active")
@@ -1598,7 +1605,7 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
             and not d.get("is_new", False)
         )
 
-        np_total_live   = len(non_personal)
+        np_total_live   = len(dm_non_personal_live) if dm_debtor_codes else len(non_personal)
         np_total        = patronage_baselines.get(agent, np_total_live)
         np_total_uses_baseline = agent in patronage_baselines
         np_active       = active_count
