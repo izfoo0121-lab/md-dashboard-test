@@ -590,7 +590,7 @@ function updateSyncStatus() {
       <div class="lbl">⚑ Flagged</div>
     </div>
   </div>
-  <div style="font-family:var(--mono);font-size:8px;color:var(--muted);padding:2px 2px 6px;"> * 持续光顾率 excludes P-Personal</div>
+  <div style="font-family:var(--mono);font-size:8px;color:var(--muted);padding:2px 2px 6px;"> * 持续光顾率 excludes P-Personal — denominator frozen at month start</div>
   <div style="position:relative;">
     <input class="search-bar" id="debtor-search"
       placeholder="Search debtor name or code across all agents..."
@@ -2179,15 +2179,48 @@ function renderDebtors() {
   const inactive = agData.inactive_count || 0;  // 待激活 = not bought in 2+ months
   const reactiv = agData.reactivation_count || 0;  // KPI: reactivated this month
   const rate    = agData.activation_rate ?? 0;
-  const npTotal = agData.activation_base   ?? total;
-  const npActive= agData.activation_active ?? active;
+  const npTotalLive   = agData.activation_base_live ?? total;
+  const npTotalFrozen = agData.activation_base ?? npTotalLive;
+  const isFrozen      = agData.activation_base_frozen === true;
+  const isBaselinePending = agData.activation_base_frozen === false;
+  const snapDate      = agData.activation_snapshot_date || null;
+  const delta         = isFrozen ? Math.max(0, npTotalLive - npTotalFrozen) : 0;
+  const npActive      = agData.activation_active ?? active;
 
-  document.getElementById('sum-total').textContent   = total;
+  const sumTotalEl = document.getElementById('sum-total');
+  sumTotalEl.textContent = npTotalFrozen;
+  let deltaEl = document.getElementById('sum-total-delta');
+  if (!deltaEl) {
+    deltaEl = document.createElement('div');
+    deltaEl.id = 'sum-total-delta';
+    deltaEl.style.cssText = 'font-family:var(--mono);font-size:9px;color:var(--green);margin-top:2px;line-height:1;';
+    sumTotalEl.parentNode.appendChild(deltaEl);
+  }
+  if (isFrozen && delta > 0) {
+    deltaEl.textContent = `+${delta} 新增`;
+    deltaEl.style.color = 'var(--green)';
+    deltaEl.style.display = '';
+  } else if (isBaselinePending) {
+    deltaEl.textContent = 'Baseline pending';
+    deltaEl.style.color = 'var(--orange)';
+    deltaEl.style.display = '';
+  } else {
+    deltaEl.style.display = 'none';
+  }
+  const sumTotalBox = sumTotalEl.closest('.summary-box');
+  if (sumTotalBox) {
+    sumTotalBox.title = isFrozen && snapDate
+      ? `Total accounts frozen at month start (${snapDate}). New onboards count toward next month's denominator.`
+      : isBaselinePending
+        ? `Live count — baseline will be locked on next business day.`
+        : `Live active non-Personal account count.`;
+  }
   document.getElementById('sum-active').textContent  = active;
   document.getElementById('sum-reactiv').textContent = inactive;  // show 待激活 count
   const rateEl = document.getElementById('sum-rate');
   rateEl.textContent = rate + '%';
-  rateEl.title = `${npActive} / ${npTotal} (excl. Personal)`;
+  const baseLabel = isFrozen && snapDate ? `frozen baseline ${snapDate}` : 'live count';
+  rateEl.title = `${npActive} / ${npTotalFrozen} (${baseLabel}, excl. Personal)`;
   document.getElementById('sum-newsku') && (document.getElementById('sum-newsku').textContent = agData.total_new_sku ?? '—');
   // Flag count
   const flagCount = getAgentFlagCount(currentAgent);
@@ -2410,6 +2443,8 @@ function renderMonthlyPersonalCard(sp) {
   const dc   = DATA.agents[currentAgent]?.debtor_cards || {};
   const kpi  = DATA.agents[currentAgent]?.kpi || {};
   const wd   = DATA.working_days || {};
+  const dcActivationBase = dc.activation_base ?? dc.activation_base_live ?? dc.total_debtors ?? 0;
+  const dcActivationActive = dc.activation_active ?? dc.active_count ?? 0;
 
   // Projected end-of-month CTN based on current pace
   const elapsed = sp.elapsed_working_days || 0;
@@ -2437,7 +2472,7 @@ function renderMonthlyPersonalCard(sp) {
     {lbl:'VIP',          val:dc.debtors?.filter(d=>d.vip).length||0, sub:'VIP debtors',              color:'var(--accent)'},
     {lbl:'激活户口',      val:dc.reactivation_count||0, sub:'reactivated this month',                color:'var(--orange)'},
     {lbl:'加SKU',        val:dc.total_new_sku||0,     sub:'new SKU debtors',                         color:'var(--purple)'},
-    {lbl:'光顾率',        val:(dc.activation_rate||0)+'%', sub:'active debtors (excl Personal)',     color:pctToColor(dc.activation_rate)},
+    {lbl:'光顾率',        val:(dc.activation_rate||0)+'%', sub: dc.activation_base_frozen ? `${dcActivationActive}/${dcActivationBase} (frozen)` : `${dcActivationActive}/${dcActivationBase} (live)`, color:pctToColor(dc.activation_rate)},
   ];
 
   // KPI scores — all sections
