@@ -406,7 +406,7 @@ async function loadAuditData() {
 
 // ── Campaign tabs ──────────────────────────────────────────────────────────
 function buildCampTabs() {
-  const camps = CAMP_DATA?.campaigns?.filter(c=>c.active) || [];
+  const camps = CAMP_DATA?.campaigns?.filter(c => c.active && c.id !== 'birthday_gift_auto') || [];
   const tabs  = document.getElementById('camp-tabs');
   tabs.innerHTML = `<button class="camp-tab ${activeCampId==='ALL'?'active':''}" onclick="switchCamp('ALL',this)">ALL</button>`
     + `<button class="camp-tab ${activeCampId==='BDAY_LIST'?'active':''}" onclick="switchCamp('BDAY_LIST',this)">🎂 Birthday List</button>`
