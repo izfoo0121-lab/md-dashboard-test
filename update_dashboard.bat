@@ -11,6 +11,10 @@ REM Regen past month:          update_dashboard.bat "Mar 26"
 REM Regen past month fast:     update_dashboard.bat "Mar 26" fast
 REM ─────────────────────────────────────────────────────────────────
 
+REM ── Force UTF-8 for Python output (avoids UnicodeEncodeError on chars like ⚠) ──
+chcp 65001 >nul
+set PYTHONIOENCODING=utf-8
+
 set MONTH_OVERRIDE=
 set FAST_FLAG=
 
