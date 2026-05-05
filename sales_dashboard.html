@@ -2700,7 +2700,7 @@ function renderDebtors() {
     if (filters.special === 'gain' && !((d.ctn_cur || 0) > (d.ctn_prev1 || 0))) return false;
     if (filters.special === 'newsku'   && !(d.new_sku_count > 0)) return false;
     if (filters.special === 'flagged'   && !getFlag(currentAgent, d.debtor_code)) return false;
-    if (filters.special === 'campaign'  && !(d.campaigns||[]).length) return false;
+    if (filters.special === 'campaign'  && (!(d.campaigns||[]).length || !getDebtorType(d))) return false;
     if (filters.special === 'overdue'   && !d.has_overdue) return false;
     if (filters.special === 'neartarget') {
       // Has bought something this month but not yet hit any campaign threshold
@@ -2793,7 +2793,7 @@ function renderDebtors() {
     if (filters.special === 'gain'    && !((d.ctn_cur || 0) > (d.ctn_prev1 || 0))) continue;
     if (filters.special === 'newsku'  && !(d.new_sku_count > 0)) continue;
     if (filters.special === 'flagged' && !getFlag(currentAgent, d.debtor_code)) continue;
-    if (filters.special === 'campaign' && !(d.campaigns||[]).length) continue;
+    if (filters.special === 'campaign' && (!(d.campaigns||[]).length || !getDebtorType(d))) continue;
     if (filters.special === 'overdue' && !d.has_overdue) continue;
     if (filters.special === 'neartarget') {
       const camps = d.campaigns || [];
