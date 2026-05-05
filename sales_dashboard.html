@@ -1624,7 +1624,8 @@ function isPersonalDebtor(d) {
 }
 
 function getDebtorType(d) {
-  return String(d?.debtor_type || d?.type || d?.cust_type || d?.customer_type || '').trim();
+  const t = String(d?.debtor_type || d?.type || d?.cust_type || d?.customer_type || '').trim();
+  return /^(unknown|nan|null|none)$/i.test(t) ? '' : t;
 }
 
 function monthRows(d, monthKey) {
@@ -1988,7 +1989,7 @@ function renderUnpurchasedMode(debtors) {
     ? pageItems.map((d, idx) => renderDebtorCard(d, start + idx + 1)).join('')
     : `<div class="empty-state">No debtors for ${unpurchasedBrandFilter}</div>`;
 
-  document.getElementById('page-info').textContent = `${startDisplay}-${endDisplay} of ${totalShown}`;
+  document.getElementById('page-info').textContent = `${startDisplay}–${endDisplay} of ${totalShown}`;
   document.getElementById('btn-prev').disabled = unpurchasedPage <= 1;
   document.getElementById('btn-next').disabled = unpurchasedPage >= pages;
   document.getElementById('btn-prev').onclick = () => changeUnpurchasedPage(-1);
@@ -2223,7 +2224,7 @@ function renderNonVipMode(debtors) {
     ? pageItems.map((d, idx) => renderDebtorCard(d, start + idx + 1)).join('')
     : `<div class="empty-state">No non-VIP debtors</div>`;
 
-  document.getElementById('page-info').textContent = `${startDisplay}-${endDisplay} of ${totalShown}`;
+  document.getElementById('page-info').textContent = `${startDisplay}–${endDisplay} of ${totalShown}`;
   document.getElementById('btn-prev').disabled = nonvipPage <= 1;
   document.getElementById('btn-next').disabled = nonvipPage >= pages;
   document.getElementById('btn-prev').onclick = () => changeNonVipPage(-1);
