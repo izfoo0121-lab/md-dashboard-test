@@ -820,8 +820,12 @@ def calc_brand_commission(df, targets, agents, cur_month, prev_months, brand_con
                 status = "none_hit"
 
             # ── Non-buyers (haven't bought in last 3 months) ───────────────
-            # All debtors for this agent
-            all_agent_debtors = set(df[df["agent"] == agent]["debtor_code"].unique())
+            # All live debtors for this agent. Debtor Maintenance is the source of
+            # truth; transaction-only orphan codes are excluded.
+            all_agent_debtors = {
+                c for c in df[df["agent"] == agent]["debtor_code"].unique()
+                if c in debtor_info and debtor_info[c].get("dm_active", True)
+            }
             non_buyers = all_agent_debtors - prev_buyers
             non_buyer_count = len(non_buyers)
 
@@ -1435,6 +1439,7 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
     }
 
     result = {}
+    orphan_debtors = []
 
     for agent in agents:
         ag_data = canggih_paid[canggih_paid["agent"] == agent]
@@ -1454,11 +1459,22 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
         if _excluded_inactive:
             log(f"  {agent}: {len(_excluded_inactive)} debtors excluded (Active=Unchecked)")
 
-        # TX fallback, also respecting Active=Unchecked
-        tx_debtor_codes = [
-            c for c in ag_data["debtor_code"].unique()
-            if debtor_info.get(c, {}).get("dm_active", True)
+        # TX fallback, also respecting Debtor Maintenance membership and Active=Unchecked.
+        # Transaction-only codes are treated as orphan/inactive and excluded from
+        # debtor-card views; Debtor Maintenance is the source of truth for live debtors.
+        tx_codes_raw = list(ag_data["debtor_code"].unique())
+        _orphan_tx_codes = [
+            c for c in tx_codes_raw
+            if c and c not in debtor_info
         ]
+        for code in _orphan_tx_codes:
+            orphan_debtors.append({"agent": agent, "debtor_code": code})
+        tx_debtor_codes = [
+            c for c in tx_codes_raw
+            if c in debtor_info and debtor_info[c].get("dm_active", True)
+        ]
+        if _orphan_tx_codes:
+            log(f"  {agent}: {len(_orphan_tx_codes)} orphan TX debtors excluded (missing from Debtor Maintenance)")
 
         # Merge: DM list is primary, tx adds any missing
         all_debtor_codes = list(dict.fromkeys(dm_debtor_codes + [
@@ -1763,6 +1779,16 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
             "total_new_sku":      total_new_sku,
             "exclusion_note":     "Summary counts exclude P-Personal",
         }
+
+    if orphan_debtors:
+        orphan_df = pd.DataFrame(orphan_debtors).drop_duplicates().sort_values(["agent", "debtor_code"])
+        orphan_df.to_csv("orphan_debtors.csv", index=False, encoding="utf-8-sig")
+        log(f"Excluded {len(orphan_df)} orphan TX debtors missing from Debtor Maintenance (written to orphan_debtors.csv)")
+    else:
+        orphan_path = Path("orphan_debtors.csv")
+        if orphan_path.exists():
+            orphan_path.unlink()
+        log("No orphan TX debtors found.")
 
     return result
 
@@ -2181,8 +2207,12 @@ def calc_brand_campaigns(df, targets, agents, cur_month, prev_months, brand_conf
         for agent in agents:
             ag_prev = brand_prev[brand_prev["agent"] == agent]
 
-            # Get all debtors for this agent
-            all_ag_debtors = df[df["agent"] == agent]["debtor_code"].unique()
+            # Get all live debtors for this agent. Transaction-only orphan codes
+            # are excluded because Debtor Maintenance is the source of truth.
+            all_ag_debtors = [
+                c for c in df[df["agent"] == agent]["debtor_code"].unique()
+                if c in debtor_info and debtor_info[c].get("dm_active", True)
+            ]
 
             for dcode in all_ag_debtors:
                 if overrides.get(dcode) == "exclude":
