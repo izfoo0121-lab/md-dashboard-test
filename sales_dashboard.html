@@ -1620,7 +1620,11 @@ function setTypeFilter(val, el) {
   renderDebtors();
 }
 function isPersonalDebtor(d) {
-  return /(^|-)personal/i.test(d.debtor_type || '');
+  return /(^|-)personal/i.test(getDebtorType(d));
+}
+
+function getDebtorType(d) {
+  return String(d?.debtor_type || d?.type || d?.cust_type || d?.customer_type || '').trim();
 }
 
 function monthRows(d, monthKey) {
@@ -1914,7 +1918,8 @@ function renderGainMode(debtors) {
 function renderUnpurchasedMode(debtors) {
   const PERSONAL = ['P-Personal','P-PERSONAL','personal','Personal','PERSONAL'];
   const eligible = debtors.filter(d =>
-    !PERSONAL.some(p => (d.debtor_type || '').includes(p)) &&
+    getDebtorType(d) &&
+    !PERSONAL.some(p => getDebtorType(d).includes(p)) &&
     d.dm_active !== false
   );
 
@@ -1942,7 +1947,7 @@ function renderUnpurchasedMode(debtors) {
   const selectedDebtors = brandNeverBought[unpurchasedBrandFilter] || [];
   const typeCounts = {};
   selectedDebtors.forEach(d => {
-    const t = d.debtor_type || 'No Type';
+    const t = getDebtorType(d) || 'No Type';
     typeCounts[t] = (typeCounts[t] || 0) + 1;
   });
 
@@ -1961,7 +1966,7 @@ function renderUnpurchasedMode(debtors) {
 
   const shown = unpurchasedTypeFilter === 'all'
     ? selectedDebtors
-    : selectedDebtors.filter(d => (d.debtor_type || 'No Type') === unpurchasedTypeFilter);
+    : selectedDebtors.filter(d => (getDebtorType(d) || 'No Type') === unpurchasedTypeFilter);
 
   shown.sort((a, b) => (a.company_name || '').localeCompare(b.company_name || ''));
   const totalShown = shown.length;
@@ -2172,7 +2177,8 @@ function renderNonVipMode(debtors) {
   const PERSONAL = ['P-Personal','P-PERSONAL','personal','Personal','PERSONAL'];
   const eligible = debtors.filter(d =>
     !d.vip &&
-    !PERSONAL.some(p => (d.debtor_type || '').includes(p)) &&
+    getDebtorType(d) &&
+    !PERSONAL.some(p => getDebtorType(d).includes(p)) &&
     d.dm_active !== false
   );
 
@@ -2184,7 +2190,7 @@ function renderNonVipMode(debtors) {
 
   const typeCounts = {};
   eligible.forEach(d => {
-    const t = d.debtor_type || 'No Type';
+    const t = getDebtorType(d) || 'No Type';
     typeCounts[t] = (typeCounts[t] || 0) + 1;
   });
 
@@ -2203,7 +2209,7 @@ function renderNonVipMode(debtors) {
 
   const shown = nonvipTypeFilter === 'all'
     ? eligible
-    : eligible.filter(d => (d.debtor_type || 'No Type') === nonvipTypeFilter);
+    : eligible.filter(d => (getDebtorType(d) || 'No Type') === nonvipTypeFilter);
 
   const totalShown = shown.length;
   const pages = Math.max(1, Math.ceil(totalShown / PAGE_SIZE));
