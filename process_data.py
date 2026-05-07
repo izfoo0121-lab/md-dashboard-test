@@ -339,6 +339,7 @@ def merge_agent_config(targets, cur_month, agent):
 
     For JSONB fields (sales_progression, brand_commission, kpi_targets, kpi_overrides),
     merges at one level deep: general + monthly → monthly wins on collision.
+    campaign_targets is intentionally agent-scoped only, so it stays on general config.
 
     Returns merged dict that can be used as ag_cfg/ag_tgts.
     """
@@ -2589,6 +2590,7 @@ def calc_kpi(agents, targets, sales_prog, brand_comm, debtor_cards, birthday_cam
         # Also check current agents for manual scores (kpi_manual is not stored monthly)
         ag_cfg_current = targets.get("agents", {}).get(agent, {})
         kpi_tgts = ag_cfg.get("kpi_targets", {})
+        camp_tgts = ag_cfg.get("campaign_targets", {})
         manual   = ag_cfg_current.get("kpi_manual", {})
         kpi_config["_birthday_camp"] = birthday_camp or {}
 
@@ -3311,8 +3313,24 @@ def main():
                     if is_target:
                         entry["converted_targets"] += 1
 
+        # Apply user-set per-agent campaign targets after counts settle.
+        # Missing/null campaign_targets fall back to the computed enrolled target
+        # count; explicit 0 is respected.
+        camp_tgts = (
+            targets.get("agents", {})
+                   .get(agent_code, {})
+                   .get("campaign_targets", {})
+            or {}
+        )
+
         # Compute conversion rate after counts settle
-        for entry in per_camp.values():
+        for cid, entry in per_camp.items():
+            user_target = camp_tgts.get(cid)
+            if user_target is not None:
+                try:
+                    entry["target_count"] = float(user_target)
+                except (TypeError, ValueError):
+                    pass
             tc = entry["target_count"]
             entry["conversion_rate_targets"] = round(
                 entry["converted_targets"] / tc, 4

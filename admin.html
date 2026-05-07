@@ -216,6 +216,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
         </span>
       </div>
 
+      <div id="bulk-import-targets"></div>
       <div id="agent-forms"></div>
       <button class="save-btn" onclick="saveAll()">SAVE ALL TARGETS</button>
       <div class="save-toast" id="save-toast">✓ Saved to targets.json</div>
@@ -922,7 +923,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
       <!-- Month selector -->
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
         <span style="font-family:var(--mono);font-size:9px;color:var(--ink3);text-transform:uppercase;">Month:</span>
-        <select id="kpi-month-select" onchange="renderKPIWeights()"
+        <select id="kpi-month-select" onchange="renderKPIWeights();renderAgentForms();"
           style="font-family:var(--mono);font-size:12px;padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--ink);">
         </select>
         <span id="kpi-total-display" style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--green);">Total: 0.00%</span>
@@ -934,7 +935,7 @@ input:checked + .toggle-slider:before{transform:translateX(20px);}
 
       <div id="kpi-weights-form"></div>
 
-      <button class="save-btn" onclick="saveKPIWeights()">SAVE KPI WEIGHTS</button>
+      <button class="save-btn" id="kpi-save-btn" onclick="saveKPIWeights()">SAVE KPI WEIGHTS</button>
       <div class="save-toast" id="kpi-save-toast">✓ KPI Weights saved</div>
     </div>
   </div>
@@ -1025,9 +1026,11 @@ function logout() {
 // ── State ──────────────────────────────────────────────────────────────────
 let CONFIG = null;
 let DASH_DATA = {};
+let LAST_TARGETS_IMPORT = null;
 
 const BRANDS = ['iFACE','SUKUN','EVO','BISON','TR20','LAM+LWM'];
 const AGENTS = ['BEN','CJ','JACKY','JAMES','JW','KEAN','KEE','KF','KI-MI','KW','LEON','NMK','SAM','YI'];
+const BULK_TARGET_KPI_KEYS = ['new_accounts','vip_count','reactivation','new_sku','activation_rate','event'];
 
 // Populate month-selector dropdowns with a rolling range of months.
 // Generates options from Jan 26 through (current real-world month + 6).
@@ -1581,6 +1584,7 @@ function addAgent() {
     sales_progression: {},
     brand_commission: bc,
     kpi_targets: {},
+    campaign_targets: {},
     kpi_overrides: {},
   };
   input.value = '';
@@ -1610,7 +1614,9 @@ function toggleAgentActive(agent, active) {
 
 function renderAgentForms() {
   const container = document.getElementById('agent-forms');
+  renderBulkImportSection();
   const agents = Object.keys(CONFIG.agents || {}).sort();
+  const selectedMonth = document.getElementById('kpi-month-select')?.value || '';
   if (!agents.length) { container.innerHTML = '<p style="color:var(--ink3);font-family:var(--mono);font-size:11px;">No agents in config</p>'; return; }
 
   container.innerHTML = agents.map(agent => {
@@ -1728,6 +1734,24 @@ function renderAgentForms() {
         const pi = snap.prev_inactive || 0;
         const autoVip   = np ? Math.max(1, Math.round(np * 0.20)) : null;
         const autoReact = pi ? Math.max(1, Math.round(pi * 0.40)) : null;
+        const activeCamps = isDynamicCampaignMonth(selectedMonth) ? getActiveCampaignsForMonth(selectedMonth) : [];
+        const campaignTargetRows = activeCamps.length ? `
+          <div style="font-family:var(--mono);font-size:9px;color:var(--blue);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px;">
+            Campaign Targets <span style="color:var(--ink3);font-size:8px;text-transform:none;letter-spacing:0;">(${selectedMonth})</span>
+          </div>
+          ${activeCamps.map(camp => {
+            const campId = String(camp.id || '');
+            const campName = kpiAdminEscape(camp.name || campId);
+            const campType = kpiAdminEscape(camp.type || 'campaign');
+            return `<div class="field-wrap" style="margin-bottom:8px;">
+              <div class="field-lbl">${campName}</div>
+              <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);margin-bottom:3px;">${campType} · ${campId}</div>
+              <input type="number" min="0" placeholder="Target count"
+                value="${a.campaign_targets?.[campId] ?? ''}"
+                onchange="setCampaignTarget('${agent}','${campId}',this.value)">
+            </div>`;
+          }).join('')}
+        ` : '';
         const snapInfo  = np ? `<div style="font-family:var(--mono);font-size:9px;color:var(--blue);margin-bottom:8px;background:rgba(77,166,255,.08);border:1px solid rgba(77,166,255,.2);border-radius:8px;padding:6px 10px;">
           📊 Month-start snapshot: <b>${np}</b> non-personal debtors · <b>${pi}</b> prev inactive
           <span style="color:var(--muted);margin-left:6px;">${snap.captured_date||''}</span>
@@ -1784,6 +1808,7 @@ function renderAgentForms() {
         </div>
         ${(overrides.vip_count||overrides.reactivation||overrides.new_sku)?
           `<button onclick="clearKPIOverrides('${agent}')" style="background:none;border:1px solid var(--border);color:var(--ink3);font-family:var(--mono);font-size:9px;padding:4px 10px;border-radius:6px;cursor:pointer;margin-top:4px;">↺ Reset to auto-calculate</button>`:''}
+        ${campaignTargetRows}
       `;
       })()}
     </div>`;
@@ -1812,6 +1837,378 @@ function setKPI(agent, field, val) {
   if (!CONFIG.agents[agent].kpi_targets) CONFIG.agents[agent].kpi_targets = {};
   CONFIG.agents[agent].kpi_targets[field] = val === '' ? null : parseFloat(val);
   updateRawJSON();
+}
+
+function setCampaignTarget(agent, camp_id, val) {
+  if (!CONFIG.agents[agent]) return;
+  if (!CONFIG.agents[agent].campaign_targets) CONFIG.agents[agent].campaign_targets = {};
+  CONFIG.agents[agent].campaign_targets[camp_id] = val === '' ? null : parseFloat(val);
+  updateRawJSON();
+}
+
+function getBulkImportMonth() {
+  return document.getElementById('kpi-month-select')?.value || '';
+}
+
+function getBulkImportCampaignKeys(month) {
+  if (!isDynamicCampaignMonth(month)) return [];
+  return getActiveCampaignsForMonth(month)
+    .filter(camp => camp.id)
+    .map(camp => ({
+      key: camp.id,
+      id: camp.id,
+      label: camp.name || camp.id,
+    }));
+}
+
+function renderBulkImportSection() {
+  const el = document.getElementById('bulk-import-targets');
+  if (!el || !CONFIG?.agents) return;
+  const month = getBulkImportMonth();
+  const campCount = getBulkImportCampaignKeys(month).length;
+  el.innerHTML = `
+    <details class="admin-card" id="bulk-import-targets-card" style="margin-bottom:14px;">
+      <summary style="cursor:pointer;font-family:var(--display);font-size:16px;letter-spacing:.05em;color:var(--ink);">
+        Bulk Import Targets
+      </summary>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);line-height:1.6;margin:10px 0;">
+        Paste CSV with columns: <b>agent,field_type,field_key,value</b>. field_type supports <b>sales_prog</b>,
+        <b>brand_comm</b>, <b>kpi</b>, <b>campaign</b>, <b>newbie_ctn</b>, <b>newbie_acc</b>, and <b>flag</b>.
+        Blank value clears the target. Current month: <b>${kpiAdminEscape(month || 'not selected')}</b>
+        ${campCount ? `(${campCount} active campaign target column${campCount === 1 ? '' : 's'} available)` : '(no active campaign target rows for this month)'}.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <button onclick="downloadTargetsTemplate()" style="font-family:var(--mono);font-size:10px;padding:7px 11px;border:1px solid var(--border);border-radius:8px;background:var(--blue);color:#fff;cursor:pointer;">Download Template</button>
+        <button onclick="validateTargetsImport()" style="font-family:var(--mono);font-size:10px;padding:7px 11px;border:1px solid var(--border);border-radius:8px;background:var(--green);color:#fff;cursor:pointer;">Validate</button>
+        <button id="targets-import-apply-btn" onclick="applyTargetsImport()" disabled style="font-family:var(--mono);font-size:10px;padding:7px 11px;border:1px solid var(--border);border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;opacity:.55;">Apply to Form</button>
+      </div>
+      <textarea id="targets-import-csv" rows="8" placeholder="agent,field_type,field_key,value&#10;BEN,kpi,vip_count,5&#10;BEN,campaign,camp_1777773301331,43" style="width:100%;min-height:150px;background:var(--bg);border:1px solid var(--border);color:var(--ink);font-family:var(--mono);font-size:11px;padding:10px;border-radius:8px;resize:vertical;"></textarea>
+      <div id="targets-import-result" style="font-family:var(--mono);font-size:10px;color:var(--ink3);line-height:1.5;margin-top:8px;"></div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--accent);margin-top:8px;">Click SAVE ALL TARGETS below to persist to Supabase.</div>
+    </details>`;
+  if (LAST_TARGETS_IMPORT?.valid) {
+    const btn = document.getElementById('targets-import-apply-btn');
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+  }
+}
+
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map(v => v.trim());
+}
+
+function normalizeImportAgent(agent) {
+  return String(agent || '').trim().toUpperCase();
+}
+
+function getTargetsImportPath(row) {
+  const key = row.field_key || '';
+  if (row.field_type === 'kpi') return `kpi_targets.${key}`;
+  if (row.field_type === 'campaign') return `campaign_targets.${key}`;
+  if (row.field_type === 'sales_prog') return `sales_progression.${key}`;
+  if (row.field_type === 'brand_comm') {
+    const [brand, subField] = key.split(':');
+    return `brand_commission.${brand}.${subField}`;
+  }
+  if (row.field_type === 'newbie_ctn') {
+    const m = key.match(/^ctn_tier_([123])_(threshold|reward)$/);
+    return m ? `newbie_tiers[${parseInt(m[1], 10) - 1}].${m[2]}` : `newbie_tiers.${key}`;
+  }
+  if (row.field_type === 'newbie_acc') {
+    const m = key.match(/^acc_tier_([123])_(count|reward)$/);
+    return m ? `newbie_account_tiers[${parseInt(m[1], 10) - 1}].${m[2]}` : `newbie_account_tiers.${key}`;
+  }
+  if (row.field_type === 'flag') return key;
+  return `${row.field_type}.${key}`;
+}
+
+function getTargetsImportCurrent(agent, fieldType, fieldKey) {
+  const cfg = CONFIG.agents?.[agent] || {};
+  if (fieldType === 'kpi') return cfg.kpi_targets?.[fieldKey];
+  if (fieldType === 'campaign') return cfg.campaign_targets?.[fieldKey];
+  if (fieldType === 'sales_prog') return cfg.sales_progression?.[fieldKey];
+  if (fieldType === 'brand_comm') {
+    const [brand, subField] = fieldKey.split(':');
+    return cfg.brand_commission?.[brand]?.[subField];
+  }
+  if (fieldType === 'newbie_ctn') {
+    const m = fieldKey.match(/^ctn_tier_([123])_(threshold|reward)$/);
+    return m ? cfg.newbie_tiers?.[parseInt(m[1], 10) - 1]?.[m[2]] : undefined;
+  }
+  if (fieldType === 'newbie_acc') {
+    const m = fieldKey.match(/^acc_tier_([123])_(count|reward)$/);
+    return m ? cfg.newbie_account_tiers?.[parseInt(m[1], 10) - 1]?.[m[2]] : undefined;
+  }
+  if (fieldType === 'flag') return cfg[fieldKey];
+  return undefined;
+}
+
+function getAgentDataPresenceNote(agent) {
+  const adata = DASH_DATA?.agents?.[agent];
+  if (!adata) return '';
+  const bits = [];
+  if (Array.isArray(adata.debtors)) bits.push(`${adata.debtors.length} debtor cards`);
+  if (adata.kpi?.score != null) bits.push(`KPI score ${adata.kpi.score}`);
+  return bits.length ? ` — currently has ${bits.join(', ')}` : '';
+}
+
+function ensureTargetTierArray(agentCfg, key, defaults) {
+  if (!Array.isArray(agentCfg[key])) agentCfg[key] = defaults.map(x => ({...x}));
+  while (agentCfg[key].length < 3) agentCfg[key].push({...defaults[agentCfg[key].length]});
+}
+
+function parseTargetsCsv(text) {
+  const lines = String(text || '').replace(/\r/g, '').split('\n').filter(l => l.trim());
+  const result = { rows: [], warnings: [], errors: [], total: 0, applyCount: 0, valid: false, sectionCounts: {} };
+  if (!lines.length) {
+    result.errors.push('No CSV rows found.');
+    return result;
+  }
+
+  const header = parseCsvLine(lines[0]).map(h => h.toLowerCase());
+  const expected = ['agent','field_type','field_key','value'];
+  const hasHeader = expected.every((h, i) => header[i] === h);
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+  const activeCampKeys = new Set(getBulkImportCampaignKeys(getBulkImportMonth()).map(c => c.key));
+  const knownAgents = new Set(Object.keys(CONFIG?.agents || {}).map(a => a.toUpperCase()));
+  const knownKpi = new Set(BULK_TARGET_KPI_KEYS);
+  const knownBrands = new Set(BRANDS);
+  const salesProgKeys = new Set(['normal_t1','normal_t2','ga','ma']);
+  const validFieldTypes = new Set(['kpi','campaign','sales_prog','brand_comm','newbie_ctn','newbie_acc','flag']);
+  const inactiveCampWarnings = new Set();
+
+  dataLines.forEach((line, idx) => {
+    const lineNo = (hasHeader ? idx + 2 : idx + 1);
+    const cols = parseCsvLine(line);
+    result.total++;
+    if (cols.length !== 4) {
+      result.errors.push(`Line ${lineNo}: expected 4 columns, got ${cols.length}.`);
+      return;
+    }
+
+    const agentInput = normalizeImportAgent(cols[0]);
+    const agent = Object.keys(CONFIG.agents || {}).find(a => a.toUpperCase() === agentInput);
+    const fieldType = String(cols[1] || '').trim().toLowerCase();
+    const fieldKey = String(cols[2] || '').trim();
+    const rawValue = String(cols[3] ?? '').trim();
+
+    if (!agent || !knownAgents.has(agentInput)) {
+      result.errors.push(`Line ${lineNo}: unknown agent "${cols[0]}".`);
+      return;
+    }
+    if (!validFieldTypes.has(fieldType)) {
+      result.errors.push(`Line ${lineNo}: unknown field_type "${cols[1]}".`);
+      return;
+    }
+    if (fieldType === 'kpi' && !knownKpi.has(fieldKey)) {
+      result.errors.push(`Line ${lineNo}: unknown KPI field "${fieldKey}".`);
+      return;
+    }
+    if (fieldType === 'campaign') {
+      if (!fieldKey.startsWith('camp_')) {
+        result.errors.push(`Line ${lineNo}: campaign field_key must start with camp_.`);
+        return;
+      }
+      if (!activeCampKeys.has(fieldKey)) inactiveCampWarnings.add(fieldKey);
+    }
+    if (fieldType === 'sales_prog' && !salesProgKeys.has(fieldKey)) {
+      result.errors.push(`Line ${lineNo}: sales_prog field_key must be normal_t1, normal_t2, ga, or ma.`);
+      return;
+    }
+    if (fieldType === 'brand_comm') {
+      const parts = fieldKey.split(':');
+      if (parts.length !== 2 || !['penetration_target','ctn_target'].includes(parts[1])) {
+        result.errors.push(`Line ${lineNo}: brand_comm field_key must be BRAND:penetration_target or BRAND:ctn_target.`);
+        return;
+      }
+      if (!knownBrands.has(parts[0])) {
+        result.errors.push(`Line ${lineNo}: unknown brand "${parts[0]}"; expected one of ${BRANDS.join(', ')}.`);
+        return;
+      }
+    }
+    if (fieldType === 'newbie_ctn' && !/^ctn_tier_[123]_(threshold|reward)$/.test(fieldKey)) {
+      result.errors.push(`Line ${lineNo}: newbie_ctn field_key must match ctn_tier_N_threshold or ctn_tier_N_reward.`);
+      return;
+    }
+    if (fieldType === 'newbie_acc' && !/^acc_tier_[123]_(count|reward)$/.test(fieldKey)) {
+      result.errors.push(`Line ${lineNo}: newbie_acc field_key must match acc_tier_N_count or acc_tier_N_reward.`);
+      return;
+    }
+    if (fieldType === 'flag') {
+      if (fieldKey !== 'active' && fieldKey !== 'is_newbie') {
+        result.errors.push(`Line ${lineNo}: flag field_key must be active or is_newbie.`);
+        return;
+      }
+      if (rawValue !== '' && rawValue !== '0' && rawValue !== '1') {
+        result.errors.push(`Line ${lineNo}: flag value must be 1, 0, or blank.`);
+        return;
+      }
+    }
+
+    let value = null;
+    if (rawValue !== '') {
+      value = Number(rawValue);
+      if (!Number.isFinite(value)) {
+        result.errors.push(`Line ${lineNo}: value "${rawValue}" is not numeric.`);
+        return;
+      }
+    }
+
+    const current = getTargetsImportCurrent(agent, fieldType, fieldKey);
+    result.sectionCounts[fieldType] = (result.sectionCounts[fieldType] || 0) + 1;
+    result.rows.push({ lineNo, agent, field_type: fieldType, field_key: fieldKey, value, raw_value: rawValue, current });
+  });
+
+  if (inactiveCampWarnings.size) {
+    const count = inactiveCampWarnings.size;
+    result.warnings.push(`${count} campaign ID${count === 1 ? '' : 's'} not currently active in ${getBulkImportMonth()}: ${Array.from(inactiveCampWarnings).join(', ')}`);
+  }
+  result.applyCount = result.rows.length;
+  result.valid = result.applyCount > 0 && result.errors.length === 0;
+  return result;
+}
+
+function previewTargetsImport(parsed) {
+  const lines = parsed.rows.slice(0, 80).map(r => {
+    const before = r.current ?? '';
+    const after = r.raw_value === '' ? '(blank)' : (r.field_type === 'flag' ? (r.value === 1 ? 'true' : 'false') : r.value);
+    const path = getTargetsImportPath(r);
+    const flagWarn = r.field_type === 'flag' ? ' ⚠️' : '';
+    const deactivateWarn = r.field_type === 'flag' && r.field_key === 'active' && r.current !== false && r.value === 0
+      ? ` <span style="color:var(--accent);font-weight:700;">⚠️ deactivation${kpiAdminEscape(getAgentDataPresenceNote(r.agent))}</span>`
+      : '';
+    const newbieWarn = r.field_type === 'flag' && r.field_key === 'is_newbie'
+      ? ` <span style="color:var(--accent);">⚠️ newbie toggle</span>`
+      : '';
+    return `<div>${flagWarn}${kpiAdminEscape(r.agent)}: ${kpiAdminEscape(path)} ${kpiAdminEscape(before)} &rarr; ${kpiAdminEscape(after)}${deactivateWarn}${newbieWarn}</div>`;
+  }).join('');
+  const more = parsed.rows.length > 80 ? `<div>...and ${parsed.rows.length - 80} more rows</div>` : '';
+  const warnings = parsed.warnings.length ? `<div style="color:var(--accent);margin-top:6px;">Warnings:<br>${parsed.warnings.map(w => '- ' + kpiAdminEscape(w)).join('<br>')}</div>` : '';
+  const errors = parsed.errors.length ? `<div style="color:#c8381a;margin-top:6px;">Rejected:<br>${parsed.errors.map(e => '- ' + kpiAdminEscape(e)).join('<br>')}</div>` : '';
+  const sections = ['sales_prog','brand_comm','kpi','campaign','newbie_ctn','newbie_acc','flag']
+    .filter(k => parsed.sectionCounts?.[k])
+    .map(k => `${parsed.sectionCounts[k]} ${k}`)
+    .join(', ');
+  return `<div style="font-weight:700;color:${parsed.errors.length ? '#c8381a' : 'var(--green)'};">Validated ${parsed.total} rows${sections ? ': ' + kpiAdminEscape(sections) : ''} — ${parsed.applyCount} will apply, ${parsed.warnings.length} warnings, ${parsed.errors.length} rejected</div>${warnings}${errors}<div style="margin-top:6px;max-height:220px;overflow:auto;border-top:1px solid var(--border);padding-top:6px;">${lines || 'No applicable rows.'}${more}</div>`;
+}
+
+function validateTargetsImport() {
+  const text = document.getElementById('targets-import-csv')?.value || '';
+  const parsed = parseTargetsCsv(text);
+  LAST_TARGETS_IMPORT = parsed;
+  const result = document.getElementById('targets-import-result');
+  if (result) result.innerHTML = previewTargetsImport(parsed);
+  const btn = document.getElementById('targets-import-apply-btn');
+  if (btn) {
+    btn.disabled = !parsed.valid;
+    btn.style.opacity = parsed.valid ? '1' : '.55';
+  }
+}
+
+function applyTargetsImport() {
+  const parsed = LAST_TARGETS_IMPORT;
+  if (!parsed?.valid) {
+    alert('Validate a clean CSV before applying.');
+    return;
+  }
+  parsed.rows.forEach(r => {
+    const agentCfg = CONFIG.agents[r.agent];
+    if (r.field_type === 'kpi') {
+      if (!agentCfg.kpi_targets) agentCfg.kpi_targets = {};
+      agentCfg.kpi_targets[r.field_key] = r.value;
+    } else if (r.field_type === 'campaign') {
+      if (!agentCfg.campaign_targets) agentCfg.campaign_targets = {};
+      agentCfg.campaign_targets[r.field_key] = r.value;
+    } else if (r.field_type === 'sales_prog') {
+      if (!agentCfg.sales_progression) agentCfg.sales_progression = {};
+      agentCfg.sales_progression[r.field_key] = r.raw_value === '' ? null : parseFloat(r.raw_value);
+    } else if (r.field_type === 'brand_comm') {
+      const [brand, subField] = r.field_key.split(':');
+      if (!agentCfg.brand_commission) agentCfg.brand_commission = {};
+      if (!agentCfg.brand_commission[brand]) agentCfg.brand_commission[brand] = { penetration_target: 0, ctn_target: 0 };
+      agentCfg.brand_commission[brand][subField] = r.raw_value === '' ? 0 : parseFloat(r.raw_value);
+    } else if (r.field_type === 'newbie_ctn') {
+      const m = r.field_key.match(/^ctn_tier_([123])_(threshold|reward)$/);
+      ensureTargetTierArray(agentCfg, 'newbie_tiers', [
+        {threshold: 0, reward: 0},
+        {threshold: 0, reward: 0},
+        {threshold: 0, reward: 0},
+      ]);
+      if (r.raw_value !== '') agentCfg.newbie_tiers[parseInt(m[1], 10) - 1][m[2]] = parseFloat(r.raw_value);
+    } else if (r.field_type === 'newbie_acc') {
+      const m = r.field_key.match(/^acc_tier_([123])_(count|reward)$/);
+      ensureTargetTierArray(agentCfg, 'newbie_account_tiers', [
+        {count: 0, reward: 0},
+        {count: 0, reward: 0},
+        {count: 0, reward: 0},
+      ]);
+      if (r.raw_value !== '') agentCfg.newbie_account_tiers[parseInt(m[1], 10) - 1][m[2]] = parseFloat(r.raw_value);
+    } else if (r.field_type === 'flag') {
+      if (r.raw_value !== '') agentCfg[r.field_key] = (r.raw_value === '1' || r.value === 1);
+    }
+  });
+  updateRawJSON();
+  renderAgentForms();
+  updateKPITotal();
+  const result = document.getElementById('targets-import-result');
+  if (result) result.innerHTML = `<div style="color:var(--green);font-weight:700;">Applied ${parsed.applyCount} rows to the form. Click SAVE ALL TARGETS below to persist to Supabase.</div>`;
+}
+
+function csvEscape(value) {
+  const s = String(value ?? '');
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadTargetsTemplate() {
+  const month = getBulkImportMonth();
+  const agents = Object.keys(CONFIG?.agents || {}).filter(agent => CONFIG.agents[agent]?.active !== false).sort();
+  const campaigns = getBulkImportCampaignKeys(month);
+  const rows = [['agent','field_type','field_key','value']];
+  agents.forEach(agent => {
+    ['normal_t1','normal_t2','ga','ma'].forEach(key => rows.push([agent, 'sales_prog', key, '']));
+    BRANDS.forEach(brand => {
+      rows.push([agent, 'brand_comm', `${brand}:penetration_target`, '']);
+      rows.push([agent, 'brand_comm', `${brand}:ctn_target`, '']);
+    });
+    BULK_TARGET_KPI_KEYS.forEach(key => rows.push([agent, 'kpi', key, '']));
+    campaigns.forEach(camp => rows.push([agent, 'campaign', camp.key, '']));
+    [1,2,3].forEach(n => {
+      rows.push([agent, 'newbie_ctn', `ctn_tier_${n}_threshold`, '']);
+      rows.push([agent, 'newbie_ctn', `ctn_tier_${n}_reward`, '']);
+    });
+    [1,2,3].forEach(n => {
+      rows.push([agent, 'newbie_acc', `acc_tier_${n}_count`, '']);
+      rows.push([agent, 'newbie_acc', `acc_tier_${n}_reward`, '']);
+    });
+    const cfg = CONFIG.agents?.[agent] || {};
+    rows.push([agent, 'flag', 'active', cfg.active === false ? 0 : 1]);
+    rows.push([agent, 'flag', 'is_newbie', cfg.is_newbie ? 1 : 0]);
+  });
+  const csv = rows.map(r => r.map(csvEscape).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `targets_template_${(month || 'month').replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function setKPIOverride(agent, field, val) {
@@ -2300,6 +2697,62 @@ function getKPIWeights(month) {
   return CONFIG.kpi_weights[month] || DEFAULT_KPI_WEIGHTS[month] || DEFAULT_KPI_WEIGHTS["Apr 26"];
 }
 
+function kpiAdminEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function getActiveCampaignsForMonth(monthLabel) {
+  if (!CAMPAIGNS_DATA?.campaigns?.length) return [];
+  const [monStr, yrStr] = String(monthLabel || '').split(' ');
+  const monthIdx = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].indexOf(monStr);
+  if (monthIdx < 0) return [];
+  const year = 2000 + parseInt(yrStr, 10);
+  if (!year) return [];
+  const monthStart = new Date(year, monthIdx, 1);
+  const monthEnd = new Date(year, monthIdx + 1, 0, 23, 59, 59);
+  return CAMPAIGNS_DATA.campaigns.filter(c => {
+    if (c.active === false) return false;
+    const created = c.created_at ? new Date(c.created_at) : null;
+    const deadline = c.deadline ? new Date(c.deadline) : null;
+    if (created && created > monthEnd) return false;       // not yet created (Q9=A forward-only)
+    if (deadline && deadline < monthStart) return false;   // expired before month
+    return true;
+  });
+}
+
+function isDynamicCampaignMonth(monthLabel) {
+  // Q5=A: May 26 onward uses dynamic per-campaign KPI
+  const [monStr, yrStr] = String(monthLabel || '').split(' ');
+  const monthIdx = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].indexOf(monStr);
+  const year = 2000 + parseInt(yrStr, 10);
+  if (year > 2026) return true;
+  if (year === 2026 && monthIdx >= 4) return true;  // May = idx 4
+  return false;
+}
+
+function getKPIWeightKeysForMonth(month) {
+  const dynamic = isDynamicCampaignMonth(month);
+  const keys = [];
+  KPI_ITEM_DEFS.forEach(([key, , sec]) => {
+    if (dynamic && sec === 'C' && key === 'campaign_1') return;
+    keys.push(key);
+    if (dynamic && key === 'birthday_campaign') {
+      getActiveCampaignsForMonth(month).forEach(camp => {
+        if (camp.id) keys.push('camp_' + camp.id);
+      });
+    }
+  });
+  return keys;
+}
+
+function getSectionCWeightKeysForMonth(month) {
+  return getKPIWeightKeysForMonth(month).filter(key => key === 'birthday_campaign' || key === 'campaign_1' || key.startsWith('camp_'));
+}
+
 function renderKPIWeights() {
   const month = document.getElementById('kpi-month-select').value;
   const weights = getKPIWeights(month);
@@ -2397,13 +2850,150 @@ ${sources.join(' / ')}`);
 // ── Save / Export / Import ─────────────────────────────────────────────────
 // Phase C: saveAll now writes to Supabase (primary), file backup is user-toggled.
 
+// Dynamic Step 5b implementation overrides the legacy static renderer above.
+function renderKPIWeights() {
+  const month = document.getElementById('kpi-month-select').value;
+  const weights = getKPIWeights(month);
+  const container = document.getElementById('kpi-weights-form');
+  if (!container) return;
+
+  let prevSec = null;
+  let html = '';
+  const dynamicMonth = isDynamicCampaignMonth(month);
+
+  const renderWeightRow = (key, label, sec) => {
+    const raw = weights[key] ?? 0;
+    const w = raw <= 1 ? parseFloat((raw * 100).toFixed(3)) : parseFloat(raw.toFixed(3));
+    const isZero = w === 0;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:${isZero?'var(--bg)':'var(--surface)'};border:1px solid var(--border);border-radius:8px;margin-bottom:4px;">
+      <div>
+        <div style="font-family:var(--body);font-size:12px;color:${isZero?'var(--ink3)':'var(--ink)'};">${label}</div>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--ink3);">${key}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input type="number" min="0" max="100" step="0.001"
+          value="${w}"
+          id="kpiw_${key}"
+          data-kpi-key="${key}"
+          data-kpi-section="${sec}"
+          class="kpi-weight-input"
+          oninput="updateKPITotal()"
+          onchange="updateKPITotal()"
+          style="width:70px;font-family:var(--mono);font-size:12px;text-align:center;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:${isZero?'var(--ink3)':'var(--blue)'};">
+        <span style="font-family:var(--mono);font-size:10px;color:var(--ink3);">%</span>
+      </div>
+    </div>`;
+  };
+
+  KPI_ITEM_DEFS.forEach(([key, label, sec, secLabel]) => {
+    if (dynamicMonth && sec === 'C' && key === 'campaign_1') return;
+    if (sec !== prevSec) {
+      const color = SEC_COLORS[sec] || '#1A1714';
+      html += `<div style="background:${color};color:#fff;font-family:var(--mono);font-size:9px;font-weight:700;padding:6px 12px;border-radius:8px;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.08em;">${secLabel}</div>`;
+      prevSec = sec;
+    }
+    html += renderWeightRow(key, label, sec);
+    if (dynamicMonth && key === 'birthday_campaign') {
+      const activeCamps = getActiveCampaignsForMonth(month);
+      if (activeCamps.length) {
+        activeCamps.forEach(camp => {
+          html += renderWeightRow('camp_' + camp.id, kpiAdminEscape(camp.name || camp.id), 'C');
+        });
+      } else {
+        html += `<div style="font-family:var(--mono);font-size:10px;color:var(--ink3);padding:8px 10px;border:1px dashed var(--border);border-radius:8px;margin-bottom:4px;">No active campaigns this month</div>`;
+      }
+      html += `<div id="kpi-c-sum" style="display:flex;justify-content:flex-end;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:700;padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin:6px 0 4px;background:var(--bg);color:var(--ink3);">Section C subtotal: <span id="kpi-c-total">0.000%</span></div>`;
+    }
+  });
+
+  container.innerHTML = html;
+  updateKPITotal();
+}
+
+function updateKPITotal() {
+  let total = 0;
+  document.querySelectorAll('.kpi-weight-input').forEach(el => {
+    total += parseFloat(el.value) || 0;
+  });
+  const totalOk = Math.abs(total - 100) < 0.01;
+  const disp = document.getElementById('kpi-total-display');
+  if (disp) {
+    disp.textContent = `Total: ${total.toFixed(3)}%`;
+    disp.style.color = totalOk ? 'var(--green)' : 'var(--accent)';
+  }
+
+  let cTotal = 0;
+  document.querySelectorAll('.kpi-weight-input[data-kpi-section="C"]').forEach(el => {
+    cTotal += parseFloat(el.value) || 0;
+  });
+  const cRow = document.getElementById('kpi-c-sum');
+  const cDisp = document.getElementById('kpi-c-total');
+  if (cDisp) cDisp.textContent = `${cTotal.toFixed(3)}%`;
+  if (cRow) {
+    cRow.style.color = 'var(--ink3)';
+    cRow.style.borderColor = 'var(--border)';
+    cRow.style.background = 'var(--bg)';
+  }
+  const btn = document.getElementById('kpi-save-btn');
+  if (btn) {
+    btn.disabled = !totalOk;
+    btn.style.opacity = totalOk ? '1' : '.55';
+    btn.title = totalOk ? '' : 'KPI weight grand total must be 100% before saving.';
+  }
+  return { total, cTotal, totalOk };
+}
+
+function saveKPIWeights() {
+  const month = document.getElementById('kpi-month-select').value;
+  if (!CONFIG.kpi_weights) CONFIG.kpi_weights = {};
+  const weights = {};
+  getKPIWeightKeysForMonth(month).forEach(key => {
+    const el = document.getElementById('kpiw_' + key);
+    weights[key] = parseFloat(el?.value || 0);
+  });
+  const totals = updateKPITotal();
+  const total = Object.values(weights).reduce((a, b) => a + b, 0);
+  if (Math.abs(total - 100) > 0.1) {
+    alert(`Total is ${total.toFixed(3)}% — must be 100% before saving.`);
+    return false;
+  }
+  const weightsDecimal = {};
+  getKPIWeightKeysForMonth(month).forEach(key => { weightsDecimal[key] = (weights[key] / 100); });
+  CONFIG.kpi_weights[month] = weightsDecimal;
+  updateRawJSON();
+  const toast = document.getElementById('kpi-save-toast');
+  if (toast) { toast.style.display = 'block'; setTimeout(() => toast.style.display = 'none', 2500); }
+  return true;
+}
+
+function copyKPIWeightsFromMonth() {
+  const months = Object.keys(CONFIG?.kpi_weights || {});
+  const current = document.getElementById('kpi-month-select').value;
+  const sources = months.filter(m => m !== current);
+  if (!sources.length) {
+    alert('No other months available to copy from.');
+    return;
+  }
+  const from = prompt(`Copy weights from which month?
+${sources.join(' / ')}`);
+  if (!from || !sources.includes(from)) return;
+  const srcWeights = getKPIWeights(from);
+  getKPIWeightKeysForMonth(current).forEach(key => {
+    const el = document.getElementById('kpiw_' + key);
+    if (el) el.value = ((srcWeights[key] ?? 0) * (srcWeights[key] <= 1 ? 100 : 1)).toFixed(3);
+  });
+  updateKPITotal();
+}
+
 async function saveAll() {
   // Sync DOM -> CONFIG for sections whose form inputs aren't auto-bound to CONFIG.
   // KPI Weights specifically needs this because renderKPIWeights renders inputs
   // from a fallback when the month doesn't exist in CONFIG, but no oninput
   // handler writes user edits back into CONFIG. saveKPIWeights() pulls the
   // current input values into CONFIG.kpi_weights[selectedMonth].
-  try { saveKPIWeights(); } catch (e) { console.warn('saveKPIWeights skipped:', e); }
+  try {
+    if (saveKPIWeights() === false) return;
+  } catch (e) { console.warn('saveKPIWeights skipped:', e); }
 
   updateRawJSON();
   updateSaveStatus('saving');
@@ -2518,6 +3108,7 @@ async function saveAllToSupabase() {
     sales_progression: cfg.sales_progression || null,
     brand_commission: cfg.brand_commission || null,
     kpi_targets: cfg.kpi_targets || null,
+    campaign_targets: cfg.campaign_targets || {},
     kpi_auto_base: cfg.kpi_auto_base || null,
     newbie_tiers: cfg.newbie_tiers || null,
     newbie_account_tiers: cfg.newbie_account_tiers || null,
@@ -2710,7 +3301,7 @@ async function loadConfigFromSupabase() {
     cfg.agents = {};
     agents.forEach(r => {
       const c = { is_newbie: r.is_newbie, active: r.active, is_new_this_month: r.is_new_this_month };
-      ['sales_progression', 'brand_commission', 'kpi_targets', 'kpi_auto_base',
+      ['sales_progression', 'brand_commission', 'kpi_targets', 'campaign_targets', 'kpi_auto_base',
        'newbie_tiers', 'newbie_account_tiers'].forEach(k => {
         if (r[k] !== null && r[k] !== undefined) c[k] = r[k];
       });
@@ -2842,7 +3433,7 @@ function importExcel(input) {
           if (!CONFIG.agents[agent]) {
             const bc = {};
             BRANDS_LIST.forEach(b => { bc[b] = {penetration_target:0,ctn_target:0}; });
-            CONFIG.agents[agent] = {is_newbie:false,active:true,sales_progression:{},brand_commission:bc,kpi_targets:{},kpi_overrides:{}};
+            CONFIG.agents[agent] = {is_newbie:false,active:true,sales_progression:{},brand_commission:bc,kpi_targets:{},campaign_targets:{},kpi_overrides:{}};
           }
           // Columns: 0=Agent, 1=T1, 2=T2, 3=GA, 4=MA,
           //          5=iFACE Pen, 6=iFACE CTN, 7=SUKUN Pen, 8=SUKUN CTN,
@@ -5434,6 +6025,7 @@ function confirmArchive() {
       sales_progression: JSON.parse(JSON.stringify(old.sales_progression || {})),
       brand_commission:  JSON.parse(JSON.stringify(old.brand_commission  || {})),
       kpi_targets:       JSON.parse(JSON.stringify(old.kpi_targets       || {})),
+      campaign_targets:  JSON.parse(JSON.stringify(old.campaign_targets  || {})),
       kpi_overrides:     {},
     };
   } else {
