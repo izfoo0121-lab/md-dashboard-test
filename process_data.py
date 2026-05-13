@@ -1467,6 +1467,7 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
     }
 
     result = {}
+    active_agent_names = {str(a).strip().upper() for a in agents}
     orphan_debtors = []
 
     for agent in agents:
@@ -1498,12 +1499,28 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
         ]
         for code in _orphan_tx_codes:
             orphan_debtors.append({"agent": agent, "debtor_code": code})
+        def _tx_code_belongs_to_agent_or_legacy(code):
+            """Allow TX fallback only when the debtor is not owned by another active agent."""
+            info = debtor_info.get(code, {})
+            assigned_agent = str(info.get("agent", "") or "").strip().upper()
+            return assigned_agent == agent.upper() or assigned_agent not in active_agent_names
+
+        _cross_agent_tx_codes = [
+            c for c in tx_codes_raw
+            if c in debtor_info
+            and debtor_info[c].get("dm_active", True)
+            and not _tx_code_belongs_to_agent_or_legacy(c)
+        ]
         tx_debtor_codes = [
             c for c in tx_codes_raw
-            if c in debtor_info and debtor_info[c].get("dm_active", True)
+            if c in debtor_info
+            and debtor_info[c].get("dm_active", True)
+            and _tx_code_belongs_to_agent_or_legacy(c)
         ]
         if _orphan_tx_codes:
             log(f"  {agent}: {len(_orphan_tx_codes)} orphan TX debtors excluded (missing from Debtor Maintenance)")
+        if _cross_agent_tx_codes:
+            log(f"  {agent}: {len(_cross_agent_tx_codes)} cross-agent TX debtors excluded (assigned to another active agent)")
 
         # Merge: DM list is primary, tx adds any missing
         all_debtor_codes = list(dict.fromkeys(dm_debtor_codes + [
@@ -1547,23 +1564,23 @@ def calc_debtor_cards(df, debtor_df, agents, cur_month, campaign_map=None, area_
             last_date = d_rows["date_parsed"].max() if not d_rows.empty else None
             last_date_str = last_date.strftime("%d/%m/%Y") if last_date and pd.notnull(last_date) else ""
 
-            # 3-month CTN
-            ctn_cur   = round(float(d_rows[d_rows["paid_on"] == cur_m]["qty_ctn"].sum()), 2)   if not d_rows.empty else 0.0
-            ctn_prev1 = round(float(d_hist_rows[d_hist_rows["paid_on"] == prev1_m]["qty_ctn"].sum()), 2) if not d_hist_rows.empty else 0.0
-            ctn_prev2 = round(float(d_hist_rows[d_hist_rows["paid_on"] == prev2_m]["qty_ctn"].sum()), 2) if not d_hist_rows.empty else 0.0
+            # 3-month CTN and item breakdown use invoice month.
+            # This matches SKU/brand penetration convention and makes the tap popup
+            # show the same month basis as the visible CTN cards.
+            _bd_col = "tranx_mth_full" if "tranx_mth_full" in d_invoice_rows.columns else "paid_on"
+            ctn_cur = round(float(d_invoice_rows[d_invoice_rows[_bd_col] == cur_m]["qty_ctn"].sum()), 2) if not d_invoice_rows.empty else 0.0
+            ctn_prev1 = round(float(d_invoice_rows[d_invoice_rows[_bd_col] == prev1_m]["qty_ctn"].sum()), 2) if not d_invoice_rows.empty else 0.0
+            ctn_prev2 = round(float(d_invoice_rows[d_invoice_rows[_bd_col] == prev2_m]["qty_ctn"].sum()), 2) if not d_invoice_rows.empty else 0.0
 
-            # Item breakdown per month (for tooltip on CTN tap)
-            # Uses invoice date (tranx_mth_full) — matches sku_status and brand penetration logic.
-            # Per Isaac's rule: brand-level metrics use invoice; normal totals use paid.
-            _bd_col = "tranx_mth_full" if "tranx_mth_full" in d_rows.columns else "paid_on"
             def item_breakdown(month_label):
-                source_rows = d_rows if month_label == cur_m else d_hist_rows
-                m_rows = source_rows[source_rows[_bd_col] == month_label]
+                if d_invoice_rows.empty:
+                    return []
+                m_rows = d_invoice_rows[d_invoice_rows[_bd_col] == month_label]
                 if m_rows.empty:
                     return []
                 grp = m_rows.groupby("item_code")["qty_ctn"].sum().reset_index()
-                grp = grp[grp["qty_ctn"] > 0].sort_values("qty_ctn", ascending=False)
-                return [{"item": str(r["item_code"]), "ctn": round(float(r["qty_ctn"]), 1)}
+                grp = grp[grp["qty_ctn"].abs() > 0.0001].sort_values("qty_ctn", ascending=False)
+                return [{"item": str(r["item_code"]), "ctn": round(float(r["qty_ctn"]), 2)}
                         for _, r in grp.iterrows()]
 
             month_breakdown = {
